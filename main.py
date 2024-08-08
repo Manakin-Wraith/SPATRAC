@@ -243,8 +243,11 @@ def view_detailed_inventory(inventory):
                   key='-INV_TABLE-',
                   enable_events=True,
                   font=FONT_SMALL,
-                  justification='left')],
-        [sg.Button('View Traceability Report', pad=PAD), 
+                  justification='left',
+                  select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],  # Enable multi-select
+        [sg.Button('Select All', pad=PAD),
+         sg.Button('Deselect All', pad=PAD),
+         sg.Button('View Traceability Report', pad=PAD), 
          sg.Button('Record Temperature', pad=PAD), 
          sg.Button('Generate Barcode', pad=PAD), 
          sg.Button('Close', pad=PAD)]
@@ -252,15 +255,31 @@ def view_detailed_inventory(inventory):
 
     window = sg.Window('Detailed Inventory', layout, resizable=True, size=(1300, 600))
 
+    selected_rows = set()
+
     while True:
         event, values = window.read()
-        if event in (sg.WIN_CLOSED, 'Close'):
+        if event == sg.WIN_CLOSED or event == 'Close':
             break
-        elif event == 'View Traceability Report':
-            if values['-INV_TABLE-']:
-                show_traceability_report(inventory[values['-INV_TABLE-'][0]])
+
+        if event == '-INV_TABLE-':
+            selected_rows = set(values['-INV_TABLE-'])
+
+        if event == 'Select All':
+            window['-INV_TABLE-'].update(select_rows=list(range(len(table_data))))
+            selected_rows = set(range(len(table_data)))
+
+        if event == 'Deselect All':
+            window['-INV_TABLE-'].update(select_rows=[])
+            selected_rows = set()
+
+        if event == 'View Traceability Report':
+            if selected_rows:
+                selected_items = [inventory[i] for i in selected_rows]
+                show_traceability_report(selected_items)
             else:
-                sg.popup_error('Please select a product', font=FONT_NORMAL)
+                sg.popup_error('Please select at least one product to view its traceability report.')
+            
         elif event == 'Record Temperature':
             if values['-INV_TABLE-']:
                 record_temperature(inventory[values['-INV_TABLE-'][0]])
@@ -274,37 +293,42 @@ def view_detailed_inventory(inventory):
 
     window.close()
 
-# Show traceability report
-def show_traceability_report(item):
-    report = f"""
-    Traceability Report for Product: {item['Product Description']}
-    -----------------------------------------------------
-    Product Code: {item['Product Code']}
-    Supplier Product Code: {item['Supplier Product Code']}
-    Supplier: {item['Supplier']}
-    Batch/Lot Number: {item['Batch/Lot']}
+def show_traceability_report(items):
+    report = ""
+    for item in items:
+        report += f"""
+        Traceability Report for Product: {item['Product Description']}
+        -----------------------------------------------------
+        Product Code: {item['Product Code']}
+        Supplier Product Code: {item['Supplier Product Code']}
+        Supplier: {item['Supplier']}
+        Batch/Lot Number: {item['Batch/Lot']}
+        
+        Delivery Information:
+        - Delivery Date: {item['Delivery Date']}
+        - Quantity Received: {item['Quantity']}
+        
+        Processing Information:
+        - Department: {item['Department']}
+        - Sub-Department: {item['Sub-Department']}
+        - Processing Date: {item['Processing Date']}
+        - Current Status: {item['Status']}
+        - Current Location: {item['Current Location']}
+        
+        Handling History:
+        {item['Handling History']}
+        
+        Quality Checks:
+        {item['Quality Checks']}
+        
+        Temperature Log:
+        {'\n'.join(item['Temperature Log']) if item['Temperature Log'] else 'No temperature logs recorded'}
+        
+        ======================================================
+        
+        """
     
-    Delivery Information:
-    - Delivery Date: {item['Delivery Date']}
-    - Quantity Received: {item['Quantity']}
-    
-    Processing Information:
-    - Department: {item['Department']}
-    - Sub-Department: {item['Sub-Department']}
-    - Processing Date: {item['Processing Date']}
-    - Current Status: {item['Status']}
-    - Current Location: {item['Current Location']}
-    
-    Handling History:
-    {item['Handling History']}
-    
-    Quality Checks:
-    {item['Quality Checks']}
-    
-    Temperature Log:
-    {'\n'.join(item['Temperature Log']) if item['Temperature Log'] else 'No temperature logs recorded'}
-    """
-    sg.popup_scrolled(report, title=f'Traceability Report - {item["Product Code"]}', font=FONT_NORMAL)
+    sg.popup_scrolled(report, title='Traceability Report', font=FONT_NORMAL, size=(100, 40))
 
 # Record temperature
 def record_temperature(item):
