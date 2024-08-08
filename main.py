@@ -121,7 +121,6 @@ def create_gui(df):
     inventory = []
 
     def update_fields(selected_product):
-     print(selected_product)  # Debugging: Check the selected product details
      window['-PRODUCT-'].update(selected_product['Product Code'])
      window['-SUPPLIER_PRODUCT-'].update(selected_product['Supplier Product Code'])
      window['-PRODUCT_DESC-'].update(selected_product['Product Description'])
