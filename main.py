@@ -111,7 +111,7 @@ def create_gui(df):
 
     layout = [
         [sg.Column(create_input_column(), pad=PAD), 
-         sg.VSeperator(),
+         sg.VSeparator(),
          sg.Column(create_table_column(), pad=PAD)]
     ]
 
@@ -121,12 +121,15 @@ def create_gui(df):
     inventory = []
 
     def update_fields(selected_product):
-        window['-PRODUCT-'].update(selected_product['Product Code'])
-        window['-SUPPLIER_PRODUCT-'].update(selected_product['Supplier Product Code'])
-        window['-PRODUCT_DESC-'].update(selected_product['Product Description'])
-        window['-PROD_INFO-'].update(f"Description: {selected_product['Product Description']}")
-        window['-SUPP_INFO-'].update(f"Supplier: {selected_product['Supplier Name']}")
-        window['-DEPT_INFO-'].update(f"Department: {selected_product['Department']}")
+     print(selected_product)  # Debugging: Check the selected product details
+     window['-PRODUCT-'].update(selected_product['Product Code'])
+     window['-SUPPLIER_PRODUCT-'].update(selected_product['Supplier Product Code'])
+     window['-PRODUCT_DESC-'].update(selected_product['Product Description'])
+     window['-PROD_INFO-'].update(f"Description: {selected_product['Product Description']}")
+     window['-SUPP_INFO-'].update(f"Supplier: {selected_product['Supplier Name']}")
+     window['-DEPT_INFO-'].update(f"Department: {selected_product['Department']}")
+
+
 
     def clear_fields():
         window['-PRODUCT-'].update('')
@@ -212,7 +215,23 @@ def create_gui(df):
 def view_detailed_inventory(inventory):
     headings = ['Product Code', 'Supplier Product Code', 'Description', 'Supplier', 'Batch/Lot', 'Department', 'Sub-Department', 'Quantity', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
     
-    table_data = [[item.get(key, '') for key in headings] for item in inventory]
+    table_data = []
+    for item in inventory:
+        row = [
+            item.get('Product Code', ''),
+            item.get('Supplier Product Code', ''),
+            item.get('Product Description', ''),  # Changed from 'Description' to 'Product Description'
+            item.get('Supplier', ''),  # Changed from 'Supplier' to 'Supplier Name'
+            item.get('Batch/Lot', ''),
+            item.get('Department', ''),
+            item.get('Sub-Department', ''),
+            item.get('Quantity', ''),
+            item.get('Delivery Date', ''),
+            item.get('Status', ''),
+            item.get('Processing Date', ''),
+            item.get('Current Location', '')
+        ]
+        table_data.append(row)
     
     layout = [
         [sg.Text('Detailed Inventory', font=FONT_HEADER, pad=PAD)],
