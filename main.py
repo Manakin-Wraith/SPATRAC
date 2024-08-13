@@ -34,7 +34,7 @@ SUB_DEPT_MAPPING = {
 }
 
 # Product operations
-def deliver_product(df, product_code, quantity):
+def deliver_product(df, product_code, quantity, unit):
     product = df[df['Product Code'] == product_code].iloc[0]
     batch_lot = f'LOT-{datetime.now().strftime("%Y%m%d")}-{product_code}'
     return {
@@ -46,6 +46,7 @@ def deliver_product(df, product_code, quantity):
         'Department': product['Department'],
         'Sub-Department': SUB_DEPT_MAPPING.get(str(product['Sub-Department']), ('Unknown', 'Unknown'))[1],
         'Quantity': quantity,
+        'Unit': unit,
         'Delivery Date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'Status': 'Delivered',
         'Processing Date': '',
@@ -54,7 +55,6 @@ def deliver_product(df, product_code, quantity):
         'Quality Checks': 'Initial check: Passed',
         'Temperature Log': []
     }
-
 
 def process_product(product):
     product['Status'] = 'Processed'
@@ -81,28 +81,32 @@ def create_input_column():
         [sg.Text('Product Code', size=(15, 1)), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True)],
         [sg.Text('Supplier Product Code', size=(15, 1)), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True)],
         [sg.Text('Product Description', size=(15, 1)), sg.Combo([], key='-PRODUCT_DESC-', size=(30, 1), enable_events=True)],
-        [sg.Text('Quantity', size=(15, 1)), sg.Input(key='-QUANTITY-', size=(20, 1))],
+        [sg.Text('Quantity', size=(15, 1)), 
+         sg.Input(key='-QUANTITY-', size=(10, 1), enable_events=True),
+         sg.Combo(['unit', 'kg'], default_value='unit', key='-UNIT-', size=(5, 1), enable_events=True)],
         [sg.Button('Deliver', size=(15, 1), pad=PAD), sg.Button('Process', size=(15, 1), pad=PAD)],
-        [sg.Button('View Inventory', size=(15, 1), pad=PAD)],
+        [sg.Button('View Inventory', size=(15, 1), pad=PAD), sg.Button('Record Temperature', size=(15, 1), pad=PAD)],
         [sg.HorizontalSeparator()],
         [sg.Text('Product Information', font=FONT_HEADER, pad=PAD)],
         [sg.Text('', size=(40, 1), key='-PROD_INFO-', font=FONT_NORMAL)],
         [sg.Text('', size=(40, 1), key='-SUPP_INFO-', font=FONT_NORMAL)],
         [sg.Text('', size=(40, 1), key='-DEPT_INFO-', font=FONT_NORMAL)],
+        [sg.Text('Quantity:', size=(15, 1)), sg.Text('', size=(25, 1), key='-QUANTITY_DISPLAY-')],
+        [sg.Text('', size=(40, 1), key='-TEMP_INFO-', font=FONT_NORMAL)],  # New line for temperature info
     ]
-
 
 def create_table_column():
     return [
         [sg.Table(values=[],
-                  headings=['Product Code', 'Description', 'Batch/Lot', 'Quantity', 'Status'],
+                  headings=['Product Code', 'Description', 'Batch/Lot', 'Quantity', 'Unit', 'Status'],
                   display_row_numbers=False,
                   auto_size_columns=False,
-                  col_widths=[15, 40, 20, 10, 10],
+                  col_widths=[15, 40, 20, 10, 5, 10],
                   num_rows=15,
                   key='-TABLE-',
                   font=FONT_SMALL,
-                  justification='left')]
+                  justification='left',
+                  enable_events=True)]  # Added enable_events=True
     ]
 
 # Main GUI
@@ -127,8 +131,13 @@ def create_gui(df):
      window['-PROD_INFO-'].update(f"Description: {selected_product['Product Description']}")
      window['-SUPP_INFO-'].update(f"Supplier: {selected_product['Supplier Name']}")
      window['-DEPT_INFO-'].update(f"Department: {selected_product['Department']}")
-
-
+    
+    # Add temperature display
+     if 'Temperature Log' in selected_product and selected_product['Temperature Log']:
+        latest_temp = selected_product['Temperature Log'][-1]
+        window['-TEMP_INFO-'].update(f"Latest Temperature: {latest_temp}")
+     else:
+        window['-TEMP_INFO-'].update("No temperature recorded")
 
     def clear_fields():
         window['-PRODUCT-'].update('')
@@ -137,13 +146,20 @@ def create_gui(df):
         window['-PROD_INFO-'].update('')
         window['-SUPP_INFO-'].update('')
         window['-DEPT_INFO-'].update('')
+        window['-QUANTITY-'].update('')
+        window['-QUANTITY_DISPLAY-'].update('')
 
     last_input = {'key': None, 'value': None}
 
     while True:
-        event, values = window.read(timeout=500)  # Add a timeout
+        event, values = window.read(timeout=500)
         if event == sg.WIN_CLOSED:
             break
+
+        if event in ('-QUANTITY-', '-UNIT-'):
+            quantity = values['-QUANTITY-']
+            unit = values['-UNIT-']
+            window['-QUANTITY_DISPLAY-'].update(f"{quantity} {unit}" if quantity else "")
 
         if event in ('-PRODUCT-', '-SUPPLIER_PRODUCT-'):
             last_input['key'] = event
@@ -176,11 +192,11 @@ def create_gui(df):
                 elif len(selected_products) > 1:
                     sg.popup_error("Multiple products found. Please be more specific.")
                     clear_fields()
-                elif last_input['value']:  # Only show error if there's input
+                elif last_input['value']:
                     sg.popup_error("No matching product found.")
                     clear_fields()
 
-                last_input = {'key': None, 'value': None}  # Reset last_input
+                last_input = {'key': None, 'value': None}
             except Exception as e:
                 sg.popup_error(f"An error occurred: {str(e)}")
                 clear_fields()
@@ -188,22 +204,42 @@ def create_gui(df):
         if event == 'Deliver':
             product_code = values['-PRODUCT-']
             quantity = values['-QUANTITY-']
+            unit = values['-UNIT-']
+
             if product_code and quantity:
-                product = deliver_product(df, product_code, quantity)
+                product = deliver_product(df, product_code, quantity, unit)
                 inventory.append(product)
-                window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Status']] for item in inventory])
+                window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
                 sg.popup('Product delivered successfully', font=FONT_NORMAL)
             else:
                 sg.popup_error('Please enter both product code and quantity', font=FONT_NORMAL)
 
         if event == 'Process':
-            if values['-TABLE-']:
-                index = values['-TABLE-'][0]
-                inventory[index] = process_product(inventory[index])
-                window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Status']] for item in inventory])
-                sg.popup('Product processed successfully', font=FONT_NORMAL)
+            selected_rows = values['-TABLE-']
+            if selected_rows:
+                selected_index = selected_rows[0]
+                if selected_index < len(inventory):
+                    product = inventory[selected_index]
+                    processed_product = process_product(product)
+                    inventory[selected_index] = processed_product
+                    window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
+                    sg.popup('Product processed successfully', font=FONT_NORMAL)
+                else:
+                    sg.popup_error('Invalid selection', font=FONT_NORMAL)
             else:
                 sg.popup_error('Please select a product to process', font=FONT_NORMAL)
+
+        if event == 'Record Temperature':
+            selected_rows = values['-TABLE-']
+            if selected_rows:
+                selected_index = selected_rows[0]
+                if selected_index < len(inventory):
+                    record_temperature(inventory[selected_index])
+                    window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
+                else:
+                    sg.popup_error('Invalid selection', font=FONT_NORMAL)
+            else:
+                sg.popup_error('Please select a product to record temperature', font=FONT_NORMAL)        
 
         if event == 'View Inventory':
             view_detailed_inventory(inventory)
@@ -212,19 +248,20 @@ def create_gui(df):
 
 # Detailed inventory view
 def view_detailed_inventory(inventory):
-    headings = ['Product Code', 'Supplier Product Code', 'Description', 'Supplier', 'Batch/Lot', 'Department', 'Sub-Department', 'Quantity', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
+    headings = ['Product Code', 'Supplier Product Code', 'Description', 'Supplier', 'Batch/Lot', 'Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
     
     table_data = []
     for item in inventory:
         row = [
             item.get('Product Code', ''),
             item.get('Supplier Product Code', ''),
-            item.get('Product Description', ''),  # Changed from 'Description' to 'Product Description'
-            item.get('Supplier', ''),  # Changed from 'Supplier' to 'Supplier Name'
+            item.get('Product Description', ''),
+            item.get('Supplier', ''),
             item.get('Batch/Lot', ''),
             item.get('Department', ''),
             item.get('Sub-Department', ''),
             item.get('Quantity', ''),
+            item.get('Unit', ''),
             item.get('Delivery Date', ''),
             item.get('Status', ''),
             item.get('Processing Date', ''),
@@ -238,13 +275,13 @@ def view_detailed_inventory(inventory):
                   headings=headings,
                   display_row_numbers=False,
                   auto_size_columns=False,
-                  col_widths=[12, 12, 30, 20, 15, 15, 15, 10, 20, 10, 20, 15],
+                  col_widths=[12, 12, 30, 20, 15, 15, 15, 10, 5, 20, 10, 20, 15],
                   num_rows=min(25, len(inventory)),
                   key='-INV_TABLE-',
                   enable_events=True,
                   font=FONT_SMALL,
                   justification='left',
-                  select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],  # Enable multi-select
+                  select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],
         [sg.Button('Select All', pad=PAD),
          sg.Button('Deselect All', pad=PAD),
          sg.Button('View Traceability Report', pad=PAD), 
@@ -306,7 +343,7 @@ def show_traceability_report(items):
         
         Delivery Information:
         - Delivery Date: {item['Delivery Date']}
-        - Quantity Received: {item['Quantity']}
+        - Quantity Received: {item['Quantity']} {item['Unit']}
         
         Processing Information:
         - Department: {item['Department']}
@@ -335,6 +372,7 @@ def record_temperature(item):
     layout = [
         [sg.Text('Record Temperature', font=FONT_NORMAL)],
         [sg.Input(key='-TEMP-', font=FONT_NORMAL)],
+        [sg.Text('Location:', font=FONT_NORMAL), sg.Input(key='-LOCATION-', font=FONT_NORMAL)],
         [sg.Button('Submit', font=FONT_NORMAL), sg.Button('Cancel', font=FONT_NORMAL)]
     ]
     window = sg.Window('Record Temperature', layout)
@@ -345,7 +383,9 @@ def record_temperature(item):
         if event == 'Submit':
             try:
                 temp = float(values['-TEMP-'])
-                item['Temperature Log'].append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}: {temp}°C")
+                location = values['-LOCATION-'] or 'Unknown'
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                item['Temperature Log'].append(f"{timestamp}: {temp}°C at {location}")
                 sg.popup('Temperature recorded successfully', font=FONT_NORMAL)
                 break
             except ValueError:
