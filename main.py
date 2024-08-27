@@ -84,15 +84,15 @@ def create_input_column():
         [sg.Text('Quantity', size=(15, 1)), 
          sg.Input(key='-QUANTITY-', size=(10, 1), enable_events=True),
          sg.Combo(['unit', 'kg'], default_value='unit', key='-UNIT-', size=(5, 1), enable_events=True)],
-        [sg.Button('Deliver', size=(15, 1), pad=PAD), sg.Button('Process', size=(15, 1), pad=PAD)],
-        [sg.Button('View Inventory', size=(15, 1), pad=PAD), sg.Button('Record Temperature', size=(15, 1), pad=PAD)],
+        [sg.Button('Received', size=(15, 1), pad=PAD), sg.Button('Process', size=(15, 1), pad=PAD)],
+        [sg.Button('View Inventory', size=(15, 1), pad=PAD)],
         [sg.HorizontalSeparator()],
         [sg.Text('Product Information', font=FONT_HEADER, pad=PAD)],
         [sg.Text('', size=(40, 1), key='-PROD_INFO-', font=FONT_NORMAL)],
         [sg.Text('', size=(40, 1), key='-SUPP_INFO-', font=FONT_NORMAL)],
         [sg.Text('', size=(40, 1), key='-DEPT_INFO-', font=FONT_NORMAL)],
         [sg.Text('Quantity:', size=(15, 1)), sg.Text('', size=(25, 1), key='-QUANTITY_DISPLAY-')],
-        [sg.Text('', size=(40, 1), key='-TEMP_INFO-', font=FONT_NORMAL)],  # New line for temperature info
+        [sg.Text('', size=(40, 1), key='-TEMP_INFO-', font=FONT_NORMAL)],
     ]
 
 def create_table_column():
@@ -108,6 +108,40 @@ def create_table_column():
                   justification='left',
                   enable_events=True)]  # Added enable_events=True
     ]
+
+# Record temperature
+def record_temperature_popup():
+    locations = [
+        'Receiving', 'Hot Foods', 'Butchery', 'Bakery', 'Fruit & Veg',
+        'Admin', 'Coffee shop', 'Floor', 'Location 9', 'Location 10', 'Location 11'
+    ]
+    
+    layout = [
+        [sg.Text('Record Temperature', font=FONT_NORMAL)],
+        [sg.Text('Temperature:', font=FONT_NORMAL), sg.Input(key='-TEMP-', font=FONT_NORMAL)],
+        [sg.Text('Location:', font=FONT_NORMAL), 
+         sg.Combo(locations, default_value=locations[0], key='-LOCATION-', font=FONT_NORMAL, readonly=True)],
+        [sg.Button('Submit', font=FONT_NORMAL), sg.Button('Cancel', font=FONT_NORMAL)]
+    ]
+    
+    window = sg.Window('Record Temperature', layout)
+    
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Cancel'):
+            window.close()
+            return None
+        if event == 'Submit':
+            try:
+                temp = float(values['-TEMP-'])
+                location = values['-LOCATION-']
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                window.close()
+                return f"{timestamp}: {temp}°C at {location}"
+            except ValueError:
+                sg.popup_error('Please enter a valid temperature', font=FONT_NORMAL)
+    
+    window.close()
 
 # Main GUI
 def create_gui(df):
@@ -132,12 +166,6 @@ def create_gui(df):
      window['-SUPP_INFO-'].update(f"Supplier: {selected_product['Supplier Name']}")
      window['-DEPT_INFO-'].update(f"Department: {selected_product['Department']}")
     
-    # Add temperature display
-     if 'Temperature Log' in selected_product and selected_product['Temperature Log']:
-        latest_temp = selected_product['Temperature Log'][-1]
-        window['-TEMP_INFO-'].update(f"Latest Temperature: {latest_temp}")
-     else:
-        window['-TEMP_INFO-'].update("No temperature recorded")
 
     def clear_fields():
         window['-PRODUCT-'].update('')
@@ -201,19 +229,28 @@ def create_gui(df):
                 sg.popup_error(f"An error occurred: {str(e)}")
                 clear_fields()
 
-        if event == 'Deliver':
+        if event == 'Received':
             product_code = values['-PRODUCT-']
             quantity = values['-QUANTITY-']
             unit = values['-UNIT-']
 
             if product_code and quantity:
                 product = deliver_product(df, product_code, quantity, unit)
+                
+                # Open temperature recording popup
+                temp_log = record_temperature_popup()
+                if temp_log:
+                    product['Temperature Log'].append(temp_log)
+                    sg.popup('Product delivered and temperature recorded successfully', font=FONT_NORMAL)
+                else:
+                    sg.popup('Product delivered successfully (no temperature recorded)', font=FONT_NORMAL)
+                
                 inventory.append(product)
                 window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
-                sg.popup('Product delivered successfully', font=FONT_NORMAL)
             else:
                 sg.popup_error('Please enter both product code and quantity', font=FONT_NORMAL)
 
+    
         if event == 'Process':
             selected_rows = values['-TABLE-']
             if selected_rows:
