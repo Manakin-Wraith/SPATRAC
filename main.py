@@ -34,7 +34,7 @@ SUB_DEPT_MAPPING = {
 }
 
 # Product operations
-def deliver_product(df, product_code, quantity, unit):
+def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date):
     product = df[df['Product Code'] == product_code].iloc[0]
     batch_lot = f'LOT-{datetime.now().strftime("%Y%m%d")}-{product_code}'
     return {
@@ -43,6 +43,8 @@ def deliver_product(df, product_code, quantity, unit):
         'Product Description': product['Product Description'],
         'Supplier': product['Supplier Name'],
         'Batch/Lot': batch_lot,
+        'Supplier Batch No': supplier_batch,
+        'Sell By Date': sell_by_date,
         'Department': product['Department'],
         'Sub-Department': SUB_DEPT_MAPPING.get(str(product['Sub-Department']), ('Unknown', 'Unknown'))[1],
         'Quantity': quantity,
@@ -77,6 +79,7 @@ def generate_barcode(data):
 
 # GUI Components
 def create_input_column():
+    current_date = datetime.now().strftime('%Y-%m-%d')
     return [
         [sg.Text('Product Code', size=(15, 1)), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True)],
         [sg.Text('Supplier Product Code', size=(15, 1)), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True)],
@@ -84,8 +87,14 @@ def create_input_column():
         [sg.Text('Quantity', size=(15, 1)), 
          sg.Input(key='-QUANTITY-', size=(10, 1), enable_events=True),
          sg.Combo(['unit', 'kg'], default_value='unit', key='-UNIT-', size=(5, 1), enable_events=True)],
-        [sg.Button('Received', size=(15, 1), pad=PAD), sg.Button('Process', size=(15, 1), pad=PAD)],
-        [sg.Button('View Inventory', size=(15, 1), pad=PAD)],
+        [sg.Text('Supplier Batch Code', size=(15, 1)), sg.Input(key='-SUPPLIER_BATCH-', size=(20, 1))],
+        [sg.Text('Sell by Date', size=(15, 1)), 
+         sg.Input(key='-SELL_BY_DATE-', size=(10, 1), default_text=current_date),
+         sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d')],
+        [sg.Column([
+            [sg.Button('Received', size=(15, 1), pad=PAD)],
+            [sg.Button('View Inventory', size=(15, 1), pad=PAD)]
+        ], element_justification='left')],
         [sg.HorizontalSeparator()],
         [sg.Text('Product Information', font=FONT_HEADER, pad=PAD)],
         [sg.Text('', size=(40, 1), key='-PROD_INFO-', font=FONT_NORMAL)],
@@ -233,22 +242,24 @@ def create_gui(df):
             product_code = values['-PRODUCT-']
             quantity = values['-QUANTITY-']
             unit = values['-UNIT-']
+            supplier_batch = values['-SUPPLIER_BATCH-']
+            sell_by_date = values['-SELL_BY_DATE-']
 
-            if product_code and quantity:
-                product = deliver_product(df, product_code, quantity, unit)
-                
-                # Open temperature recording popup
-                temp_log = record_temperature_popup()
-                if temp_log:
-                    product['Temperature Log'].append(temp_log)
-                    sg.popup('Product delivered and temperature recorded successfully', font=FONT_NORMAL)
-                else:
-                    sg.popup('Product delivered successfully (no temperature recorded)', font=FONT_NORMAL)
-                
-                inventory.append(product)
-                window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
+            if product_code and quantity and supplier_batch and sell_by_date:
+               product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date)
+        
+               # Open temperature recording popup
+               temp_log = record_temperature_popup()
+               if temp_log:
+                   product['Temperature Log'].append(temp_log)
+                   sg.popup('Product delivered and temperature recorded successfully', font=FONT_NORMAL)
+               else:
+                   sg.popup('Product delivered successfully (no temperature recorded)', font=FONT_NORMAL)
+        
+               inventory.append(product)
+               window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
             else:
-                sg.popup_error('Please enter both product code and quantity', font=FONT_NORMAL)
+                sg.popup_error('Please fill in all required fields', font=FONT_NORMAL)
 
     
         if event == 'Process':
@@ -285,7 +296,7 @@ def create_gui(df):
 
 # Detailed inventory view
 def view_detailed_inventory(inventory):
-    headings = ['Product Code', 'Supplier Product Code', 'Description', 'Supplier', 'Batch/Lot', 'Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
+    headings = ['Product Code', 'Supplier Product Code', 'Description', 'Supplier', 'Batch/Lot', 'Supplier Batch No', 'Sell By Date', 'Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
     
     table_data = []
     for item in inventory:
@@ -295,6 +306,8 @@ def view_detailed_inventory(inventory):
             item.get('Product Description', ''),
             item.get('Supplier', ''),
             item.get('Batch/Lot', ''),
+            item.get('Supplier Batch No', ''),
+            item.get('Sell By Date', ''),
             item.get('Department', ''),
             item.get('Sub-Department', ''),
             item.get('Quantity', ''),
@@ -322,7 +335,7 @@ def view_detailed_inventory(inventory):
         [sg.Button('Select All', pad=PAD),
          sg.Button('Deselect All', pad=PAD),
          sg.Button('View Traceability Report', pad=PAD), 
-         sg.Button('Record Temperature', pad=PAD), 
+         sg.Button('Process', pad=PAD),  # Changed from 'Record Temperature' to 'Process'
          sg.Button('Generate Barcode', pad=PAD), 
          sg.Button('Close', pad=PAD)]
     ]
@@ -354,11 +367,38 @@ def view_detailed_inventory(inventory):
             else:
                 sg.popup_error('Please select at least one product to view its traceability report.')
             
-        elif event == 'Record Temperature':
+        elif event == 'Process':
             if values['-INV_TABLE-']:
-                record_temperature(inventory[values['-INV_TABLE-'][0]])
+                selected_index = values['-INV_TABLE-'][0]
+                product = inventory[selected_index]
+                if product['Status'] != 'Processed':
+                    temp_log = record_temperature_popup()
+                    if temp_log:
+                        product['Temperature Log'].append(temp_log)
+                        processed_product = process_product(product)
+                        inventory[selected_index] = processed_product
+                        table_data[selected_index] = [
+                            processed_product.get('Product Code', ''),
+                            processed_product.get('Supplier Product Code', ''),
+                            processed_product.get('Product Description', ''),
+                            processed_product.get('Supplier', ''),
+                            processed_product.get('Batch/Lot', ''),
+                            processed_product.get('Department', ''),
+                            processed_product.get('Sub-Department', ''),
+                            processed_product.get('Quantity', ''),
+                            processed_product.get('Unit', ''),
+                            processed_product.get('Delivery Date', ''),
+                            processed_product.get('Status', ''),
+                            processed_product.get('Processing Date', ''),
+                            processed_product.get('Current Location', '')
+                        ]
+                        window['-INV_TABLE-'].update(table_data)
+                        sg.popup('Product processed and temperature recorded successfully', font=FONT_NORMAL)
+                else:
+                    sg.popup('This product has already been processed', font=FONT_NORMAL)
             else:
                 sg.popup_error('Please select a product', font=FONT_NORMAL)
+
         elif event == 'Generate Barcode':
             if values['-INV_TABLE-']:
                 generate_and_show_barcode(inventory[values['-INV_TABLE-'][0]])
@@ -377,6 +417,8 @@ def show_traceability_report(items):
         Supplier Product Code: {item['Supplier Product Code']}
         Supplier: {item['Supplier']}
         Batch/Lot Number: {item['Batch/Lot']}
+        Supplier Batch No: {item['Supplier Batch No']}
+        Sell By Date: {item['Sell By Date']}
         
         Delivery Information:
         - Delivery Date: {item['Delivery Date']}
