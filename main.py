@@ -77,11 +77,20 @@ def generate_barcode(data):
     image.thumbnail((300, 300))
     return image
 
-# GUI Components
+# New function for search suggestions
+def get_search_suggestions(df, search_term):
+    suggestions = df[df['Product Description'].str.contains(search_term, case=False, na=False)]['Product Description'].tolist()
+    return suggestions[:10]  # Limit to 10 suggestions
+
+
+# Modified create_input_column function
 def create_input_column():
     current_date = datetime.now().strftime('%Y-%m-%d')
     return [
-        [sg.Text('Search Description:', size=(15, 1)), sg.Input(key='-SEARCH-', size=(30, 1)), sg.Button('Search', size=(10, 1))],
+        [sg.Text('Search Description:', size=(15, 1)), 
+         sg.Input(key='-SEARCH-', size=(30, 1), enable_events=True),
+         sg.Button('Search', size=(10, 1))],
+        [sg.Listbox(values=[], size=(30, 6), key='-SUGGESTIONS-', enable_events=True, visible=False)],
         [sg.HorizontalSeparator()],
         [sg.Text('Product Code', size=(15, 1)), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True)],
         [sg.Text('Supplier Product Code', size=(15, 1)), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True)],
@@ -154,7 +163,7 @@ def record_temperature_popup():
     
     window.close()
 
-# Main GUI
+# Modified create_gui function
 def create_gui(df):
     sg.theme('LightGrey1')
 
@@ -194,6 +203,37 @@ def create_gui(df):
         event, values = window.read(timeout=500)
         if event == sg.WIN_CLOSED:
             break
+
+        # New event handling for search suggestions
+        if event == '-SEARCH-':
+            search_term = values['-SEARCH-']
+            if search_term:
+                suggestions = get_search_suggestions(df, search_term)
+                window['-SUGGESTIONS-'].update(values=suggestions, visible=True)
+            else:
+                window['-SUGGESTIONS-'].update(values=[], visible=False)
+
+        if event == '-SUGGESTIONS-':
+            if values['-SUGGESTIONS-']:
+                selected_suggestion = values['-SUGGESTIONS-'][0]
+                window['-SEARCH-'].update(value=selected_suggestion)
+                window['-SUGGESTIONS-'].update(visible=False)
+                # Trigger search with the selected suggestion
+                selected_products = df[df['Product Description'] == selected_suggestion]
+                if len(selected_products) == 1:
+                    update_fields(selected_products.iloc[0])
+
+        if event == 'Search':
+            search_term = values['-SEARCH-']
+            selected_products = df[df['Product Description'].str.contains(search_term, case=False, na=False)]
+            if len(selected_products) == 1:
+                update_fields(selected_products.iloc[0])
+            elif len(selected_products) > 1:
+                sg.popup_error("Multiple products found. Please be more specific.")
+                clear_fields()
+            else:
+                sg.popup_error("No matching product found.")
+                clear_fields()
 
         if event in ('-QUANTITY-', '-UNIT-'):
             quantity = values['-QUANTITY-']
