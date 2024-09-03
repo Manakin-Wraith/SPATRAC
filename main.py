@@ -1,5 +1,7 @@
 import pandas as pd
 import PySimpleGUI as sg
+import csv
+from fpdf import FPDF
 from datetime import datetime
 import barcode
 from barcode.writer import ImageWriter
@@ -73,14 +75,14 @@ def generate_barcode(data):
     code128(data, writer=ImageWriter()).write(rv)
     image = Image.open(rv)
     image.thumbnail((300, 300))
-    bio = io.BytesIO()
-    image.save(bio, format="PNG")
-    return bio.getvalue()
+    return image
 
 # GUI Components
 def create_input_column():
     current_date = datetime.now().strftime('%Y-%m-%d')
     return [
+        [sg.Text('Search Description:', size=(15, 1)), sg.Input(key='-SEARCH-', size=(30, 1)), sg.Button('Search', size=(10, 1))],
+        [sg.HorizontalSeparator()],
         [sg.Text('Product Code', size=(15, 1)), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True)],
         [sg.Text('Supplier Product Code', size=(15, 1)), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True)],
         [sg.Text('Product Description', size=(15, 1)), sg.Combo([], key='-PRODUCT_DESC-', size=(30, 1), enable_events=True)],
@@ -237,6 +239,7 @@ def create_gui(df):
             except Exception as e:
                 sg.popup_error(f"An error occurred: {str(e)}")
                 clear_fields()
+
 
         if event == 'Received':
             product_code = values['-PRODUCT-']
@@ -408,6 +411,27 @@ def view_detailed_inventory(inventory):
     window.close()
 
 def show_traceability_report(items):
+    report = generate_report_text(items)
+    
+    layout = [
+        [sg.Multiline(report, size=(100, 40), font=FONT_NORMAL, key='-REPORT-')],
+        [sg.Button('Save as PDF', key='-PDF-'), sg.Button('Save as CSV', key='-CSV-'), sg.Button('Close')]
+    ]
+    
+    window = sg.Window('Traceability Report', layout, finalize=True)
+    
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Close'):
+            break
+        elif event == '-PDF-':
+            save_as_pdf(report)
+        elif event == '-CSV-':
+            save_as_csv(items)
+    
+    window.close()
+
+def generate_report_text(items):
     report = ""
     for item in items:
         report += f"""
@@ -443,9 +467,26 @@ def show_traceability_report(items):
         ======================================================
         
         """
-    
-    sg.popup_scrolled(report, title='Traceability Report', font=FONT_NORMAL, size=(100, 40))
+    return report
 
+def save_as_pdf(report):
+    filename = sg.popup_get_file('Save PDF as', save_as=True, file_types=(("PDF Files", "*.pdf"),))
+    if filename:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, report)
+        pdf.output(filename)
+        sg.popup(f"Report saved as {filename}")
+
+def save_as_csv(items):
+    filename = sg.popup_get_file('Save CSV as', save_as=True, file_types=(("CSV Files", "*.csv"),))
+    if filename:
+        with open(filename, 'w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=items[0].keys())
+            writer.writeheader()
+            writer.writerows(items)
+        sg.popup(f"Report saved as {filename}")
 # Record temperature
 def record_temperature(item):
     layout = [
@@ -473,18 +514,36 @@ def record_temperature(item):
 
 # Generate and show barcode
 def generate_and_show_barcode(item):
-    barcode_data = generate_barcode(item['Batch/Lot'])
+    # Combine Batch/Lot with Supplier Batch No
+    combined_batch = f"{item['Batch/Lot']}-{item['Supplier Batch No']}"
+    barcode_image = generate_barcode(combined_batch)
+    
+    # Convert image to bytes for PySimpleGUI
+    bio = io.BytesIO()
+    barcode_image.save(bio, format="PNG")
+    barcode_data = bio.getvalue()
+    
     layout = [
         [sg.Text(f"Barcode for {item['Product Description']}", font=FONT_NORMAL)],
-        [sg.Image(data=barcode_data)],
-        [sg.Button('Close', font=FONT_NORMAL)]
+        [sg.Image(data=barcode_data, key='-IMAGE-')],
+        [sg.Button('Save Barcode', font=FONT_NORMAL), sg.Button('Close', font=FONT_NORMAL)]
     ]
     window = sg.Window('Barcode', layout)
     while True:
         event, values = window.read()
-        if event in (sg.WIN_CLOSED, 'Close'):
+        if event == sg.WIN_CLOSED or event == 'Close':
             break
+        elif event == 'Save Barcode':
+            save_barcode(barcode_image, item)
     window.close()
+
+def save_barcode(image, item):
+    filename = sg.popup_get_file('Save Barcode as PNG', save_as=True, file_types=(("PNG Files", "*.png"),))
+    if filename:
+        if not filename.lower().endswith('.png'):
+            filename += '.png'
+        image.save(filename)
+        sg.popup(f"Barcode saved as {filename}")
 
 if __name__ == "__main__":
     df = load_data('Butchery reports Big G.csv')
