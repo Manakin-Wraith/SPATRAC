@@ -7,6 +7,7 @@ import barcode
 from barcode.writer import ImageWriter
 import io
 from PIL import Image
+from auth_system import AuthSystem
 
 # Constants
 FONT_HEADER = ('Helvetica', 20)
@@ -161,91 +162,111 @@ def record_temperature_popup():
             except ValueError:
                 sg.popup_error('Please enter a valid temperature', font=FONT_NORMAL)
     
-    window.close()
+        window.close()
+
+def show_login_window(auth_system):
+    layout = [
+        [sg.Text('Username:'), sg.Input(key='-USERNAME-')],
+        [sg.Text('Password:'), sg.Input(key='-PASSWORD-', password_char='*')],
+        [sg.Button('Login'), sg.Button('Exit')]
+    ]
+    window = sg.Window('Login', layout)
+
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Exit'):
+            window.close()
+            return False
+        if event == 'Login':
+            if auth_system.login(values['-USERNAME-'], values['-PASSWORD-']):
+                sg.popup('Login successful!')
+                window.close()
+                return True
+            else:
+                sg.popup('Login failed. Please try again.')
+    
+        window.close()
+        return False
+        
+    
 
 # Modified create_gui function
 def create_gui(df):
-    sg.theme('LightGrey1')
-
-    layout = [
-        [sg.Column(create_input_column(), pad=PAD), 
-         sg.VSeparator(),
-         sg.Column(create_table_column(), pad=PAD)]
-    ]
-
-    window = sg.Window('Inventory Management System', layout, finalize=True, resizable=True)
-    window['-PRODUCT_DESC-'].update(values=df['Product Description'].tolist())
-
-    inventory = []
-
-    def update_fields(selected_product):
-     window['-PRODUCT-'].update(selected_product['Product Code'])
-     window['-SUPPLIER_PRODUCT-'].update(selected_product['Supplier Product Code'])
-     window['-PRODUCT_DESC-'].update(selected_product['Product Description'])
-     window['-PROD_INFO-'].update(f"Description: {selected_product['Product Description']}")
-     window['-SUPP_INFO-'].update(f"Supplier: {selected_product['Supplier Name']}")
-     window['-DEPT_INFO-'].update(f"Department: {selected_product['Department']}")
-    
-
-    def clear_fields():
-        window['-PRODUCT-'].update('')
-        window['-SUPPLIER_PRODUCT-'].update('')
-        window['-PRODUCT_DESC-'].update('')
-        window['-PROD_INFO-'].update('')
-        window['-SUPP_INFO-'].update('')
-        window['-DEPT_INFO-'].update('')
-        window['-QUANTITY-'].update('')
-        window['-QUANTITY_DISPLAY-'].update('')
-
-    last_input = {'key': None, 'value': None}
+    auth_system = AuthSystem()
+    # Add some users (in practice, this might be done separately)
+    auth_system.add_user("john", "password123")
+    auth_system.add_user("jane", "securepass456")
 
     while True:
-        event, values = window.read(timeout=500)
-        if event == sg.WIN_CLOSED:
-            break
+        if not show_login_window(auth_system):
+            return  # Exit if login fails or user cancels
 
-        # New event handling for search suggestions
-        if event == '-SEARCH-':
-            search_term = values['-SEARCH-']
-            if search_term:
-                suggestions = get_search_suggestions(df, search_term)
-                window['-SUGGESTIONS-'].update(values=suggestions, visible=True)
-            else:
-                window['-SUGGESTIONS-'].update(values=[], visible=False)
+        sg.theme('LightGrey1')
 
-        if event == '-SUGGESTIONS-':
-            if values['-SUGGESTIONS-']:
-                selected_suggestion = values['-SUGGESTIONS-'][0]
-                window['-SEARCH-'].update(value=selected_suggestion)
-                window['-SUGGESTIONS-'].update(visible=False)
-                # Trigger search with the selected suggestion
-                selected_products = df[df['Product Description'] == selected_suggestion]
-                if len(selected_products) == 1:
-                    update_fields(selected_products.iloc[0])
+        layout = [
+            [sg.Text('SPATRAC Inventory Management System', font=FONT_HEADER, pad=PAD)],
+            [sg.Column(create_input_column(), pad=PAD), 
+             sg.VSeparator(),
+             sg.Column(create_table_column(), pad=PAD)],
+            [sg.Button('Logout', size=(15, 1), pad=PAD)]
+        ]
 
-        if event == 'Search':
-            search_term = values['-SEARCH-']
-            selected_products = df[df['Product Description'].str.contains(search_term, case=False, na=False)]
-            if len(selected_products) == 1:
-                update_fields(selected_products.iloc[0])
-            elif len(selected_products) > 1:
-                sg.popup_error("Multiple products found. Please be more specific.")
-                clear_fields()
-            else:
-                sg.popup_error("No matching product found.")
-                clear_fields()
+        window = sg.Window('SPATRAC', layout, finalize=True, resizable=True)
+        window['-PRODUCT_DESC-'].update(values=df['Product Description'].tolist())
 
-        if event in ('-QUANTITY-', '-UNIT-'):
-            quantity = values['-QUANTITY-']
-            unit = values['-UNIT-']
-            window['-QUANTITY_DISPLAY-'].update(f"{quantity} {unit}" if quantity else "")
+        inventory = []
 
-        if event in ('-PRODUCT-', '-SUPPLIER_PRODUCT-'):
-            last_input['key'] = event
-            last_input['value'] = values[event]
-        elif event == '-PRODUCT_DESC-' and values['-PRODUCT_DESC-']:
-            try:
-                selected_products = df[df['Product Description'] == values['-PRODUCT_DESC-']]
+        def update_fields(selected_product):
+            window['-PRODUCT-'].update(selected_product['Product Code'])
+            window['-SUPPLIER_PRODUCT-'].update(selected_product['Supplier Product Code'])
+            window['-PRODUCT_DESC-'].update(selected_product['Product Description'])
+            window['-PROD_INFO-'].update(f"Description: {selected_product['Product Description']}")
+            window['-SUPP_INFO-'].update(f"Supplier: {selected_product['Supplier Name']}")
+            window['-DEPT_INFO-'].update(f"Department: {selected_product['Department']}")
+
+        def clear_fields():
+            window['-PRODUCT-'].update('')
+            window['-SUPPLIER_PRODUCT-'].update('')
+            window['-PRODUCT_DESC-'].update('')
+            window['-PROD_INFO-'].update('')
+            window['-SUPP_INFO-'].update('')
+            window['-DEPT_INFO-'].update('')
+            window['-QUANTITY-'].update('')
+            window['-QUANTITY_DISPLAY-'].update('')
+
+        last_input = {'key': None, 'value': None}
+
+        while True:
+            event, values = window.read(timeout=500)
+            if event == sg.WIN_CLOSED:
+                return  # Exit the application
+
+            if event == 'Logout':
+                window.close()
+                break  # Break the inner loop to go back to login
+
+            # New event handling for search suggestions
+            if event == '-SEARCH-':
+                search_term = values['-SEARCH-']
+                if search_term:
+                    suggestions = get_search_suggestions(df, search_term)
+                    window['-SUGGESTIONS-'].update(values=suggestions, visible=True)
+                else:
+                    window['-SUGGESTIONS-'].update(values=[], visible=False)
+
+            if event == '-SUGGESTIONS-':
+                if values['-SUGGESTIONS-']:
+                    selected_suggestion = values['-SUGGESTIONS-'][0]
+                    window['-SEARCH-'].update(value=selected_suggestion)
+                    window['-SUGGESTIONS-'].update(visible=False)
+                    # Trigger search with the selected suggestion
+                    selected_products = df[df['Product Description'] == selected_suggestion]
+                    if len(selected_products) == 1:
+                        update_fields(selected_products.iloc[0])
+
+            if event == 'Search':
+                search_term = values['-SEARCH-']
+                selected_products = df[df['Product Description'].str.contains(search_term, case=False, na=False)]
                 if len(selected_products) == 1:
                     update_fields(selected_products.iloc[0])
                 elif len(selected_products) > 1:
@@ -254,88 +275,114 @@ def create_gui(df):
                 else:
                     sg.popup_error("No matching product found.")
                     clear_fields()
-            except Exception as e:
-                sg.popup_error(f"An error occurred: {str(e)}")
-                clear_fields()
-        elif event == '__TIMEOUT__' and last_input['value']:
-            try:
-                if last_input['key'] == '-PRODUCT-':
-                    selected_products = df[df['Product Code'] == last_input['value']]
-                elif last_input['key'] == '-SUPPLIER_PRODUCT-':
-                    selected_products = df[df['Supplier Product Code'] == last_input['value']]
-                else:
-                    continue
 
-                if len(selected_products) == 1:
-                    update_fields(selected_products.iloc[0])
-                elif len(selected_products) > 1:
-                    sg.popup_error("Multiple products found. Please be more specific.")
+            if event in ('-QUANTITY-', '-UNIT-'):
+                quantity = values['-QUANTITY-']
+                unit = values['-UNIT-']
+                window['-QUANTITY_DISPLAY-'].update(f"{quantity} {unit}" if quantity else "")
+
+            if event in ('-PRODUCT-', '-SUPPLIER_PRODUCT-'):
+                last_input['key'] = event
+                last_input['value'] = values[event]
+            elif event == '-PRODUCT_DESC-' and values['-PRODUCT_DESC-']:
+                try:
+                    selected_products = df[df['Product Description'] == values['-PRODUCT_DESC-']]
+                    if len(selected_products) == 1:
+                        update_fields(selected_products.iloc[0])
+                    elif len(selected_products) > 1:
+                        sg.popup_error("Multiple products found. Please be more specific.")
+                        clear_fields()
+                    else:
+                        sg.popup_error("No matching product found.")
+                        clear_fields()
+                except Exception as e:
+                    sg.popup_error(f"An error occurred: {str(e)}")
                     clear_fields()
-                elif last_input['value']:
-                    sg.popup_error("No matching product found.")
+            elif event == '__TIMEOUT__' and last_input['value']:
+                try:
+                    if last_input['key'] == '-PRODUCT-':
+                        selected_products = df[df['Product Code'] == last_input['value']]
+                    elif last_input['key'] == '-SUPPLIER_PRODUCT-':
+                        selected_products = df[df['Supplier Product Code'] == last_input['value']]
+                    else:
+                        continue
+
+                    if len(selected_products) == 1:
+                        update_fields(selected_products.iloc[0])
+                    elif len(selected_products) > 1:
+                        sg.popup_error("Multiple products found. Please be more specific.")
+                        clear_fields()
+                    elif last_input['value']:
+                        sg.popup_error("No matching product found.")
+                        clear_fields()
+
+                    last_input = {'key': None, 'value': None}
+                except Exception as e:
+                    sg.popup_error(f"An error occurred: {str(e)}")
                     clear_fields()
 
-                last_input = {'key': None, 'value': None}
-            except Exception as e:
-                sg.popup_error(f"An error occurred: {str(e)}")
-                clear_fields()
+            if event == 'Received':
+                product_code = values['-PRODUCT-']
+                quantity = values['-QUANTITY-']
+                unit = values['-UNIT-']
+                supplier_batch = values['-SUPPLIER_BATCH-']
+                sell_by_date = values['-SELL_BY_DATE-']
 
-
-        if event == 'Received':
-            product_code = values['-PRODUCT-']
-            quantity = values['-QUANTITY-']
-            unit = values['-UNIT-']
-            supplier_batch = values['-SUPPLIER_BATCH-']
-            sell_by_date = values['-SELL_BY_DATE-']
-
-            if product_code and quantity and supplier_batch and sell_by_date:
-               product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date)
-        
-               # Open temperature recording popup
-               temp_log = record_temperature_popup()
-               if temp_log:
-                   product['Temperature Log'].append(temp_log)
-                   sg.popup('Product delivered and temperature recorded successfully', font=FONT_NORMAL)
-               else:
-                   sg.popup('Product delivered successfully (no temperature recorded)', font=FONT_NORMAL)
-        
-               inventory.append(product)
-               window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
-            else:
-                sg.popup_error('Please fill in all required fields', font=FONT_NORMAL)
-
-    
-        if event == 'Process':
-            selected_rows = values['-TABLE-']
-            if selected_rows:
-                selected_index = selected_rows[0]
-                if selected_index < len(inventory):
-                    product = inventory[selected_index]
-                    processed_product = process_product(product)
-                    inventory[selected_index] = processed_product
-                    window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
-                    sg.popup('Product processed successfully', font=FONT_NORMAL)
-                else:
-                    sg.popup_error('Invalid selection', font=FONT_NORMAL)
-            else:
-                sg.popup_error('Please select a product to process', font=FONT_NORMAL)
-
-        if event == 'Record Temperature':
-            selected_rows = values['-TABLE-']
-            if selected_rows:
-                selected_index = selected_rows[0]
-                if selected_index < len(inventory):
-                    record_temperature(inventory[selected_index])
+                if product_code and quantity and supplier_batch and sell_by_date:
+                    product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date)
+            
+                    # Open temperature recording popup
+                    temp_log = record_temperature_popup()
+                    if temp_log:
+                        product['Temperature Log'].append(temp_log)
+                        sg.popup('Product delivered and temperature recorded successfully', font=FONT_NORMAL)
+                    else:
+                        sg.popup('Product delivered successfully (no temperature recorded)', font=FONT_NORMAL)
+            
+                    inventory.append(product)
                     window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
                 else:
-                    sg.popup_error('Invalid selection', font=FONT_NORMAL)
-            else:
-                sg.popup_error('Please select a product to record temperature', font=FONT_NORMAL)        
+                    sg.popup_error('Please fill in all required fields', font=FONT_NORMAL)
 
-        if event == 'View Inventory':
-            view_detailed_inventory(inventory)
+            if event == 'Process':
+                selected_rows = values['-TABLE-']
+                if selected_rows:
+                    selected_index = selected_rows[0]
+                    if selected_index < len(inventory):
+                        product = inventory[selected_index]
+                        processed_product = process_product(product)
+                        inventory[selected_index] = processed_product
+                        window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
+                        sg.popup('Product processed successfully', font=FONT_NORMAL)
+                    else:
+                        sg.popup_error('Invalid selection', font=FONT_NORMAL)
+                else:
+                    sg.popup_error('Please select a product to process', font=FONT_NORMAL)
 
-    window.close()
+            if event == 'Record Temperature':
+                selected_rows = values['-TABLE-']
+                if selected_rows:
+                    selected_index = selected_rows[0]
+                    if selected_index < len(inventory):
+                        record_temperature(inventory[selected_index])
+                        window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Batch/Lot'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
+                    else:
+                        sg.popup_error('Invalid selection', font=FONT_NORMAL)
+                else:
+                    sg.popup_error('Please select a product to record temperature', font=FONT_NORMAL)        
+
+            if event == 'View Inventory':
+                window.hide()
+                view_detailed_inventory(inventory)
+                window.un_hide()
+
+        # If we're here, it means we've logged out
+        sg.popup('Logged out successfully', font=FONT_NORMAL)
+
+        # This line is reached when the user closes the main window
+        sg.popup('Thank you for using SPATRAC Inventory Management System', font=FONT_NORMAL)
+
+        window.close()
 
 # Detailed inventory view
 def view_detailed_inventory(inventory):
@@ -368,7 +415,7 @@ def view_detailed_inventory(inventory):
                   headings=headings,
                   display_row_numbers=False,
                   auto_size_columns=False,
-                  col_widths=[12, 12, 30, 20, 15, 15, 15, 10, 5, 20, 10, 20, 15],
+                  col_widths=[12, 15, 30, 20, 15, 15, 15, 15, 15, 10, 10, 15, 15, 15, 20],
                   num_rows=min(25, len(inventory)),
                   key='-INV_TABLE-',
                   enable_events=True,
@@ -426,6 +473,8 @@ def view_detailed_inventory(inventory):
                             processed_product.get('Product Description', ''),
                             processed_product.get('Supplier', ''),
                             processed_product.get('Batch/Lot', ''),
+                            processed_product.get('Supplier Batch No', ''),
+                            processed_product.get('Sell By Date', ''),
                             processed_product.get('Department', ''),
                             processed_product.get('Sub-Department', ''),
                             processed_product.get('Quantity', ''),
@@ -449,6 +498,7 @@ def view_detailed_inventory(inventory):
                 sg.popup_error('Please select a product', font=FONT_NORMAL)
 
     window.close()
+
 
 def show_traceability_report(items):
     report = generate_report_text(items)
@@ -584,6 +634,7 @@ def save_barcode(image, item):
             filename += '.png'
         image.save(filename)
         sg.popup(f"Barcode saved as {filename}")
+        
 
 if __name__ == "__main__":
     df = load_data('Butchery reports Big G.csv')
