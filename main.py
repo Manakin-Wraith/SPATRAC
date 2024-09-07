@@ -7,10 +7,10 @@ import io
 from PIL import Image
 
 # Constants
-FONT_HEADER = ('Helvetica', 20)
-FONT_NORMAL = ('Helvetica', 12)
-FONT_SMALL = ('Helvetica', 10)
-PAD = (10, 5)
+FONT_HEADER = ('Helvetica', 30)
+FONT_NORMAL = ('Helvetica', 18)
+FONT_SMALL = ('Helvetica', 14)
+PAD = (20, 10)
 
 # Load the data
 def load_data(file_path):
@@ -78,36 +78,38 @@ def generate_barcode(data):
 # GUI Components
 def create_input_column():
     return [
-        [sg.Text('Product Code', size=(15, 1)), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True)],
-        [sg.Text('Supplier Product Code', size=(15, 1)), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True)],
-        [sg.Text('Product Description', size=(15, 1)), sg.Combo([], key='-PRODUCT_DESC-', size=(30, 1), enable_events=True)],
-        [sg.Text('Quantity', size=(15, 1)), 
-         sg.Input(key='-QUANTITY-', size=(10, 1), enable_events=True),
-         sg.Combo(['unit', 'kg'], default_value='unit', key='-UNIT-', size=(5, 1), enable_events=True)],
-        [sg.Button('Deliver', size=(15, 1), pad=PAD), sg.Button('Process', size=(15, 1), pad=PAD)],
-        [sg.Button('View Inventory', size=(15, 1), pad=PAD), sg.Button('Record Temperature', size=(15, 1), pad=PAD)],
+        [sg.Text('Product Code', size=(15, 1), font=FONT_NORMAL), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True, font=FONT_NORMAL)],
+        [sg.Text('Supp. Product Code', size=(15, 1), font=FONT_NORMAL), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True, font=FONT_NORMAL)],
+        [sg.Text('Product Description', size=(15, 1), font=FONT_NORMAL), sg.Combo([], key='-PRODUCT_DESC-', size=(30, 1), enable_events=True, font=FONT_NORMAL)],
+        [sg.Text('Quantity', size=(15, 1), font=FONT_NORMAL), 
+         sg.Input(key='-QUANTITY-', size=(10, 1), enable_events=True, font=FONT_NORMAL),
+         sg.Combo(['unit', 'kg'], default_value='unit', key='-UNIT-', size=(5, 1), enable_events=True, font=FONT_NORMAL)],
+        [sg.Button('Recieved', size=(15, 1), pad=PAD, font=FONT_NORMAL), sg.Button('Process', size=(15, 1), pad=PAD, font=FONT_NORMAL)],
+        [sg.Button('View Inventory', size=(15, 1), pad=PAD, font=FONT_NORMAL), sg.Button('Record Temperature', size=(15, 1), pad=PAD, font=FONT_NORMAL)],
         [sg.HorizontalSeparator()],
         [sg.Text('Product Information', font=FONT_HEADER, pad=PAD)],
         [sg.Text('', size=(40, 1), key='-PROD_INFO-', font=FONT_NORMAL)],
         [sg.Text('', size=(40, 1), key='-SUPP_INFO-', font=FONT_NORMAL)],
         [sg.Text('', size=(40, 1), key='-DEPT_INFO-', font=FONT_NORMAL)],
-        [sg.Text('Quantity:', size=(15, 1)), sg.Text('', size=(25, 1), key='-QUANTITY_DISPLAY-')],
-        [sg.Text('', size=(40, 1), key='-TEMP_INFO-', font=FONT_NORMAL)],  # New line for temperature info
+        [sg.Text('Quantity:', size=(15, 1), font=FONT_NORMAL), sg.Text('', size=(25, 1), key='-QUANTITY_DISPLAY-', font=FONT_NORMAL)],
+        [sg.Text('', size=(40, 1), key='-TEMP_INFO-', font=FONT_NORMAL)],
     ]
+
 
 def create_table_column():
     return [
         [sg.Table(values=[],
                   headings=['Product Code', 'Description', 'Batch/Lot', 'Quantity', 'Unit', 'Status'],
                   display_row_numbers=False,
-                  auto_size_columns=False,
-                  col_widths=[15, 40, 20, 10, 5, 10],
+                  auto_size_columns=True,
+                  col_widths=[15, 30, 20, 10, 5, 15],
                   num_rows=15,
                   key='-TABLE-',
                   font=FONT_SMALL,
                   justification='left',
                   enable_events=True)]  # Added enable_events=True
     ]
+
 
 # Main GUI
 def create_gui(df):
@@ -119,7 +121,7 @@ def create_gui(df):
          sg.Column(create_table_column(), pad=PAD)]
     ]
 
-    window = sg.Window('Inventory Management System', layout, finalize=True, resizable=True)
+    window = sg.Window('SPATRAC', layout, finalize=True, resizable=True)
     window['-PRODUCT_DESC-'].update(values=df['Product Description'].tolist())
 
     inventory = []
@@ -137,7 +139,7 @@ def create_gui(df):
         latest_temp = selected_product['Temperature Log'][-1]
         window['-TEMP_INFO-'].update(f"Latest Temperature: {latest_temp}")
      else:
-        window['-TEMP_INFO-'].update("No temperature recorded")
+        window['-TEMP_INFO-'].update("Remember to log the Temperature!")
 
     def clear_fields():
         window['-PRODUCT-'].update('')
@@ -201,7 +203,7 @@ def create_gui(df):
                 sg.popup_error(f"An error occurred: {str(e)}")
                 clear_fields()
 
-        if event == 'Deliver':
+        if event == 'Recieved':
             product_code = values['-PRODUCT-']
             quantity = values['-QUANTITY-']
             unit = values['-UNIT-']
@@ -396,7 +398,7 @@ def record_temperature(item):
 def generate_and_show_barcode(item):
     barcode_data = generate_barcode(item['Batch/Lot'])
     layout = [
-        [sg.Text(f"Barcode for {item['Product Description']}", font=FONT_NORMAL)],
+        [sg.Text(f"{item['Product Description']}", font=FONT_NORMAL)],
         [sg.Image(data=barcode_data)],
         [sg.Button('Close', font=FONT_NORMAL)]
     ]

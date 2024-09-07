@@ -13,11 +13,23 @@ This is an Inventory Management System developed using Python, PySimpleGUI, and 
 
 ## Requirements
 
-- Python 3.x
-- Pandas
-- PySimpleGUI
-- Pillow
-- python-barcode
+ - Pbarcode==1.0.4
+ - Levenshtein==0.25.1
+ - numpy==2.1.0
+ - pandas==2.2.2
+ - pillow==10.4.0
+ - pyasn1==0.6.0
+ - PySimpleGUI==5.0.6
+ - python-barcode==0.15.1
+ - python-dateutil==2.9.0.post0
+ - python-Levenshtein==0.25.1
+ - pytz==2024.1
+ - rapidfuzz==3.9.6
+ - rsa==4.9
+ - setuptools==73.0.1
+ - six==1.16.0
+ - tzdata==2024.1
+ 
 
 ## Installation
 
@@ -27,11 +39,11 @@ This is an Inventory Management System developed using Python, PySimpleGUI, and 
     ```
 2. Navigate to the project directory:
     ```bash
-    cd inventory-management-system
+    cd SPATRAC
     ```
 3. Install the required Python packages:
     ```bash
-    pip install pandas pysimplegui pillow python-barcode
+    pip install requirements.txt
     ```
 
 ## Usage
