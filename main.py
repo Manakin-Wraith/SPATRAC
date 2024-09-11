@@ -207,10 +207,11 @@ def create_gui(df):
         # Search and Product Info Column
         left_column = [
             [sg.Frame('Search', [
-                [sg.Text('Search Description:', size=(15, 1)), 
-                 sg.Input(key='-SEARCH-', size=(30, 1), enable_events=True),
-                 sg.Button('Search', size=(10, 1))]
-            ])],
+    [sg.Text('Search Description:', size=(15, 1)), 
+     sg.Input(key='-SEARCH-', size=(30, 1), enable_events=True),
+     sg.Button('Search', size=(10, 1))],
+    [sg.Listbox(values=[], size=(45, 6), key='-SUGGESTIONS-', enable_events=True, visible=False)]
+])],
             [sg.Frame('Product Information', [
                 [sg.Text('Product Code', size=(15, 1)), sg.Input(key='-PRODUCT-', size=(20, 1), enable_events=True)],
                 [sg.Text('Supplier Product', size=(15, 1)), sg.Input(key='-SUPPLIER_PRODUCT-', size=(20, 1), enable_events=True)],
@@ -283,9 +284,17 @@ def create_gui(df):
                 search_term = values['-SEARCH-']
                 if search_term:
                     suggestions = get_search_suggestions(df, search_term)
-                    window['-PRODUCT_DESC-'].update(values=suggestions)
+                    window['-SUGGESTIONS-'].update(values=suggestions, visible=True)
                 else:
-                    window['-PRODUCT_DESC-'].update(values=df['Product Description'].tolist())
+                    window['-SUGGESTIONS-'].update(values=[], visible=False)
+
+            if event == '-SUGGESTIONS-' and values['-SUGGESTIONS-']:
+                selected_suggestion = values['-SUGGESTIONS-'][0]
+                window['-SEARCH-'].update(value=selected_suggestion)
+                window['-SUGGESTIONS-'].update(visible=False)
+                selected_products = df[df['Product Description'] == selected_suggestion]
+                if len(selected_products) == 1:
+                    update_fields(selected_products.iloc[0])
 
             if event == 'Search':
                 search_term = values['-SEARCH-']
