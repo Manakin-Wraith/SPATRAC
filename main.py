@@ -387,18 +387,11 @@ def create_gui(df):
 
 # Detailed inventory view
 def view_detailed_inventory(inventory):
-    headings = ['Product Code', 'Supplier Product Code', 'Description', 'Supplier', 'Batch/Lot', 'Supplier Batch No', 'Sell By Date', 'Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
+    headings = ['Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
     
     table_data = []
     for item in inventory:
         row = [
-            item.get('Product Code', ''),
-            item.get('Supplier Product Code', ''),
-            item.get('Product Description', ''),
-            item.get('Supplier', ''),
-            item.get('Batch/Lot', ''),
-            item.get('Supplier Batch No', ''),
-            item.get('Sell By Date', ''),
             item.get('Department', ''),
             item.get('Sub-Department', ''),
             item.get('Quantity', ''),
@@ -416,7 +409,7 @@ def view_detailed_inventory(inventory):
                   headings=headings,
                   display_row_numbers=False,
                   auto_size_columns=False,
-                  col_widths=[12, 15, 30, 20, 15, 15, 15, 15, 15, 10, 10, 15, 15, 15, 20],
+                  col_widths=[15, 15, 10, 8, 15, 10, 15, 20],
                   num_rows=min(25, len(inventory)),
                   key='-INV_TABLE-',
                   enable_events=True,
@@ -425,9 +418,9 @@ def view_detailed_inventory(inventory):
                   select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],
         [sg.Button('Select All', pad=PAD),
          sg.Button('Deselect All', pad=PAD),
-         sg.Button('View Traceability Report', pad=PAD), 
-         sg.Button('Process', pad=PAD),  # Changed from 'Record Temperature' to 'Process'
-         sg.Button('Generate Barcode', pad=PAD), 
+         sg.Button('View Traceability Report', pad=PAD),
+         sg.Button('Process', pad=PAD),
+         sg.Button('Generate Barcode', pad=PAD),
          sg.Button('Close', pad=PAD)]
     ]
 
@@ -469,13 +462,6 @@ def view_detailed_inventory(inventory):
                         processed_product = process_product(product)
                         inventory[selected_index] = processed_product
                         table_data[selected_index] = [
-                            processed_product.get('Product Code', ''),
-                            processed_product.get('Supplier Product Code', ''),
-                            processed_product.get('Product Description', ''),
-                            processed_product.get('Supplier', ''),
-                            processed_product.get('Batch/Lot', ''),
-                            processed_product.get('Supplier Batch No', ''),
-                            processed_product.get('Sell By Date', ''),
                             processed_product.get('Department', ''),
                             processed_product.get('Sub-Department', ''),
                             processed_product.get('Quantity', ''),
@@ -615,7 +601,7 @@ def generate_and_show_barcode(item):
     barcode_data = bio.getvalue()
     
     layout = [
-        [sg.Text(f"Barcode for {item['Product Description']}", font=FONT_NORMAL)],
+        [sg.Text(item['Product Description'], font=FONT_NORMAL)],
         [sg.Image(data=barcode_data, key='-IMAGE-')],
         [sg.Button('Save Barcode', font=FONT_NORMAL), sg.Button('Close', font=FONT_NORMAL)]
     ]
