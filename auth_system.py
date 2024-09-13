@@ -26,6 +26,12 @@ class AuthSystem:
             self.log.append(f"{time.ctime()}: {self.current_user.username} logged out")
             self.current_user = None
 
+    def get_current_user(self):
+        return self.current_user.username if self.current_user else None
+    
+    def is_authenticated(self):
+        return self.current_user is not None
+
     def handle_delivery(self):
         if self.current_user:
             self.log.append(f"{time.ctime()}: {self.current_user.username} handled product delivery")

@@ -37,9 +37,10 @@ SUB_DEPT_MAPPING = {
 }
 
 # Product operations
-def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date):
+def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system):
     product = df[df['Product Code'] == product_code].iloc[0]
     batch_lot = f'LOT-{datetime.now().strftime("%Y%m%d")}-{product_code}'
+    current_user = auth_system.get_current_user()
     return {
         'Product Code': product_code,
         'Supplier Product Code': product['Supplier Product Code'],
@@ -56,17 +57,32 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
         'Status': 'Delivered',
         'Processing Date': '',
         'Current Location': 'Receiving',
-        'Handling History': f'Received at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
+        'Handling History': f'Received at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} by {current_user}',
         'Quality Checks': 'Initial check: Passed',
-        'Temperature Log': []
+        'Temperature Log': [],
+        'Received By': current_user,
+        'Processed By': '',
+        'Delivery Approved By': '',
+        'Delivery Approval Date': ''
     }
 
-def process_product(product):
-    product['Status'] = 'Processed'
+def approve_delivery(product, auth_system):
+    current_user = auth_system.get_current_user()
+    approval_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    product['Status'] = 'Delivery Approved'
+    product['Delivery Approved By'] = current_user
+    product['Delivery Approval Date'] = approval_date
+    product['Handling History'] += f"\nDelivery approved at {approval_date} by {current_user}"
+    return product
+
+def process_product(product, auth_system):
+    current_user = auth_system.get_current_user()
+    product['Status'] = 'Delivery Approved'
     product['Processing Date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     product['Current Location'] = f"{product['Department']} - {product['Sub-Department']}"
-    product['Handling History'] += f"\nMoved to {product['Current Location']} at {product['Processing Date']}"
-    product['Quality Checks'] += f"\nPre-processing check: Passed"
+    product['Handling History'] += f"\n        {product['Current Location']}"
+    product['Quality Checks'] += f"\n        Pre-processing check: Passed"
+    product['Processed By'] = current_user
     return product
 
 # Barcode generation
@@ -345,7 +361,7 @@ def create_gui(df):
                 sell_by_date = values['-SELL_BY_DATE-']
 
                 if product_code and quantity and supplier_batch and sell_by_date:
-                    product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date)
+                    product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system)
                     temp_log = record_temperature_popup()
                     if temp_log:
                         product['Temperature Log'].append(temp_log)
@@ -364,7 +380,7 @@ def create_gui(df):
                     for idx in selected_rows:
                         if idx < len(inventory):
                             product = inventory[idx]
-                            processed_product = process_product(product)
+                            processed_product = process_product(product, auth_system)
                             inventory[idx] = processed_product
                     window['-TABLE-'].update([[item['Product Code'], item['Product Description'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
                     sg.popup('Selected products delivery successfully', font=FONT_NORMAL)
@@ -382,7 +398,7 @@ def create_gui(df):
 
             if event == 'View Inventory':
                 window.hide()
-                view_detailed_inventory(inventory)
+                view_detailed_inventory(inventory, auth_system)
                 window.un_hide()
 
         window.close()
@@ -390,7 +406,7 @@ def create_gui(df):
         sg.popup('Thank you for using SPATRAC Inventory Management System', font=FONT_NORMAL)
 
 # Detailed inventory view
-def view_detailed_inventory(inventory):
+def view_detailed_inventory(inventory, auth_system):
     headings = ['Product Description', 'Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
     
     table_data = []
@@ -460,11 +476,11 @@ def view_detailed_inventory(inventory):
             if values['-INV_TABLE-']:
                 selected_index = values['-INV_TABLE-'][0]
                 product = inventory[selected_index]
-                if product['Status'] != 'Processed':
+                if product['Status'] != 'Delivery Approved':
                     temp_log = record_temperature_popup()
                     if temp_log:
                         product['Temperature Log'].append(temp_log)
-                        processed_product = process_product(product)
+                        processed_product = process_product(product, auth_system)
                         inventory[selected_index] = processed_product
                         table_data[selected_index] = [
                             processed_product.get('Product Description', ''),
@@ -530,13 +546,15 @@ def generate_report_text(items):
         Delivery Information:
         - Delivery Date: {item['Delivery Date']}
         - Quantity Received: {item['Quantity']} {item['Unit']}
+        - Received By: {item['Received By']}
         
         Processing Information:
         - Department: {item['Department']}
         - Sub-Department: {item['Sub-Department']}
         - Processing Date: {item['Processing Date']}
         - Current Status: {item['Status']}
-        - Current Location: {item['Current Location']}
+        - Location: {item['Current Location']}
+        - Processed By: {item['Processed By']}
         
         Handling History:
         {item['Handling History']}
@@ -570,6 +588,7 @@ def save_as_csv(items):
             writer.writeheader()
             writer.writerows(items)
         sg.popup(f"Report saved as {filename}")
+        
 # Record temperature
 def record_temperature(item):
     layout = [
