@@ -1,9 +1,10 @@
 import time
 
 class User:
-    def __init__(self, username, password):
+    def __init__(self, username, password, department=None):
         self.username = username
         self.password = password
+        self.department = department
 
 class AuthSystem:
     def __init__(self):
@@ -11,8 +12,8 @@ class AuthSystem:
         self.current_user = None
         self.log = []
 
-    def add_user(self, username, password):
-        self.users[username] = User(username, password)
+    def add_user(self, username, password, department=None):
+        self.users[username] = User(username, password, department)
 
     def login(self, username, password):
         if username in self.users and self.users[username].password == password:
@@ -31,6 +32,18 @@ class AuthSystem:
     
     def is_authenticated(self):
         return self.current_user is not None
+
+    def is_authorized(self, username, department):
+        print(f"Checking authorization for username: {username}, department: {department}")
+        if username in self.users:
+            user = self.users[username]
+            print(f"User's department: {user.department}")
+            print(f"Product's department: {department}")
+            result = user.department.lower().strip() == department.lower().strip()
+            print(f"Authorization result: {result}")
+            return result
+        print(f"User {username} not found in the system")
+        return False
 
     def handle_delivery(self):
         if self.current_user:

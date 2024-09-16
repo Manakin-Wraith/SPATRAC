@@ -49,8 +49,8 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
         'Batch/Lot': batch_lot,
         'Supplier Batch No': supplier_batch,
         'Sell By Date': sell_by_date,
-        'Department': product['Department'],
-        'Sub-Department': SUB_DEPT_MAPPING.get(str(product['Sub-Department']), ('Unknown', 'Unknown'))[1],
+        'Department': product['Department'].strip(),  # Ensure consistent formatting
+        'Sub-Department': SUB_DEPT_MAPPING.get(str(product['Sub-Department']), ('Unknown', 'Unknown'))[1].strip(),
         'Quantity': quantity,
         'Unit': unit,
         'Delivery Date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -77,10 +77,11 @@ def approve_delivery(product, auth_system):
 
 def process_product(product, auth_system):
     current_user = auth_system.get_current_user()
+    approval_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     product['Status'] = 'Delivery Approved'
     product['Processing Date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     product['Current Location'] = f"{product['Department']} - {product['Sub-Department']}"
-    product['Handling History'] += f"\n        {product['Current Location']}"
+    product['Handling History'] += f"\n        Processed at {approval_date} by {current_user}"
     product['Quality Checks'] += f"\n        Pre-processing check: Passed"
     product['Processed By'] = current_user
     return product
@@ -211,8 +212,10 @@ def show_login_window(auth_system):
 def create_gui(df):
     auth_system = AuthSystem()
     # Add some users (in practice, this might be done separately)
-    auth_system.add_user("john", "password123")
-    auth_system.add_user("jane", "securepass456")
+    auth_system.add_user("john", "password123", "2")
+    auth_system.add_user("jane", "securepass456", "Bakery")
+    auth_system.add_user("bob", "manager789", "Produce")
+    auth_system.add_user("alice", "admin321", "Admin")
 
     while True:
         if not show_login_window(auth_system):
@@ -256,7 +259,7 @@ def create_gui(df):
                       key='-TABLE-',
                       enable_events=True,
                       tooltip='Recently Received Products')],
-            [sg.Button('Delivery Approved', size=(15, 1)), sg.Button('Generate Barcode', size=(15, 1))]
+            [sg.Button('Generate Barcode', size=(15, 1))]
         ]
 
         # Main Layout
@@ -405,6 +408,45 @@ def create_gui(df):
 
         sg.popup('Thank you for using SPATRAC Inventory Management System', font=FONT_NORMAL)
 
+def department_manager_login(auth_system):
+    # Get all unique departments from the auth_system
+    departments = list(set(user.department for user in auth_system.users.values() if user.department))
+
+    layout = [
+        [sg.Text('Department Manager Login', font=FONT_HEADER)],
+        [sg.Text('Username:', size=(15, 1)), sg.Input(key='-USERNAME-')],
+        [sg.Text('Password:', size=(15, 1)), sg.Input(key='-PASSWORD-', password_char='*')],
+        [sg.Text('Department:', size=(15, 1)), sg.Combo(departments, key='-DEPARTMENT-', readonly=True)],
+        [sg.Button('Login'), sg.Button('Cancel')]
+    ]
+    window = sg.Window('Department Manager Login', layout)
+
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Cancel'):
+            window.close()
+            return False, None, None
+
+        if event == 'Login':
+            username = values['-USERNAME-']
+            password = values['-PASSWORD-']
+            selected_department = values['-DEPARTMENT-']
+            
+            if auth_system.login(username, password):
+                # Check if the logged-in user is authorized for this department
+                user = auth_system.users.get(username)
+                if user and user.department == selected_department:
+                    sg.popup('Login successful!')
+                    window.close()
+                    return True, username, selected_department
+                else:
+                    sg.popup_error('You are not authorized for this department.')
+            else:
+                sg.popup_error('Login failed. Please check your credentials and try again.')
+    
+        window.close()
+        return False, None, None
+
 # Detailed inventory view
 def view_detailed_inventory(inventory, auth_system):
     headings = ['Product Description', 'Department', 'Sub-Department', 'Quantity', 'Unit', 'Delivery Date', 'Status', 'Processing Date', 'Current Location']
@@ -474,31 +516,41 @@ def view_detailed_inventory(inventory, auth_system):
             
         elif event == 'Process':
             if values['-INV_TABLE-']:
-                selected_index = values['-INV_TABLE-'][0]
-                product = inventory[selected_index]
-                if product['Status'] != 'Delivery Approved':
-                    temp_log = record_temperature_popup()
-                    if temp_log:
-                        product['Temperature Log'].append(temp_log)
-                        processed_product = process_product(product, auth_system)
-                        inventory[selected_index] = processed_product
-                        table_data[selected_index] = [
-                            processed_product.get('Product Description', ''),
-                            processed_product.get('Department', ''),
-                            processed_product.get('Sub-Department', ''),
-                            processed_product.get('Quantity', ''),
-                            processed_product.get('Unit', ''),
-                            processed_product.get('Delivery Date', ''),
-                            processed_product.get('Status', ''),
-                            processed_product.get('Processing Date', ''),
-                            processed_product.get('Current Location', '')
-                        ]
-                        window['-INV_TABLE-'].update(table_data)
-                        sg.popup('Product processed and temperature recorded successfully', font=FONT_NORMAL)
-                else:
-                    sg.popup('This product has already been processed', font=FONT_NORMAL)
-            else:
-                sg.popup_error('Please select a product', font=FONT_NORMAL)
+               selected_index = values['-INV_TABLE-'][0]
+               product = inventory[selected_index]
+               print(f"Selected product department: {product['Department']}")
+               if product['Status'] != 'Delivery Approved':
+                   login_success, username, department = department_manager_login(auth_system)
+                   if login_success:
+                       print(f"Login successful for user: {username}, department: {department}")
+                       if auth_system.is_authorized(username, product['Department']):
+                            temp_log = record_temperature_popup()
+                            if temp_log:
+                                product['Temperature Log'].append(temp_log)
+                                processed_product = process_product(product, auth_system)
+                                processed_product['Processed By'] = username  # Add the username of the manager who processed it
+                                inventory[selected_index] = processed_product
+                                table_data[selected_index] = [
+                                    processed_product.get('Product Description', ''),
+                                    processed_product.get('Department', ''),
+                                    processed_product.get('Sub-Department', ''),
+                                    processed_product.get('Quantity', ''),
+                                    processed_product.get('Unit', ''),
+                                    processed_product.get('Delivery Date', ''),
+                                    processed_product.get('Status', ''),
+                                    processed_product.get('Processing Date', ''),
+                                    processed_product.get('Current Location', '')
+                                ]
+                                window['-INV_TABLE-'].update(table_data)
+                                sg.popup('Product processed and temperature recorded successfully', font=FONT_NORMAL)
+                            else:
+                             sg.popup_error('You are not authorized to process products from this department.')
+                       else:
+                         sg.popup_error('Processing cancelled due to failed login.')
+                   else:
+                     sg.popup('This product has already been processed', font=FONT_NORMAL)
+               else:
+                 sg.popup_error('Please select a product', font=FONT_NORMAL)
 
         elif event == 'Generate Barcode':
             if values['-INV_TABLE-']:
@@ -564,7 +616,7 @@ def generate_report_text(items):
         
         Temperature Log:
         {'\n'.join(item['Temperature Log']) if item['Temperature Log'] else 'No temperature logs recorded'}
-        
+    
         ======================================================
         
         """
