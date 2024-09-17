@@ -1,5 +1,5 @@
-pandas
-PySimpleGUI
-fpdf
-python-barcode
-Pillow
+pandas==2.2.2
+PySimpleGUI==5.0.6
+fpdf==1.7.2
+python-barcode==0.15.1
+Pillow==10.4.0

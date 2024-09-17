@@ -1,35 +1,21 @@
-# SPATRAC
+## SPATRAC Inventory Management System
 
-# Inventory Management System
-
-This is an Inventory Management System developed using Python, PySimpleGUI, and Pandas. The system allows for tracking the delivery and processing of products, including generating barcodes and viewing detailed inventory information.
+SPATRAC is a comprehensive Inventory Management System developed using Python, PySimpleGUI, and Pandas. The system allows for tracking the delivery and processing of products, including generating barcodes, viewing detailed inventory information, and maintaining user authentication.
 
 ## Features
 
+- **User Authentication**: Secure login system to control access to the application.
 - **Product Delivery**: Register the delivery of products, generate batch/lot numbers, and track initial quality checks.
 - **Product Processing**: Process delivered products, update their status, and move them to the appropriate department and sub-department.
 - **Barcode Generation**: Automatically generate and display barcodes for each product.
 - **Inventory Management**: View a table of all products in the inventory with detailed information, including product codes, descriptions, and status.
+- **Temperature Logging**: Record and track temperature logs for products.
+- **Traceability Reports**: Generate and export detailed traceability reports in PDF and CSV formats.
+- **Search Functionality**: Easily search for products using various criteria.
 
 ## Requirements
 
- - Pbarcode==1.0.4
- - Levenshtein==0.25.1
- - numpy==2.1.0
- - pandas==2.2.2
- - pillow==10.4.0
- - pyasn1==0.6.0
- - PySimpleGUI==5.0.6
- - python-barcode==0.15.1
- - python-dateutil==2.9.0.post0
- - python-Levenshtein==0.25.1
- - pytz==2024.1
- - rapidfuzz==3.9.6
- - rsa==4.9
- - setuptools==73.0.1
- - six==1.16.0
- - tzdata==2024.1
- 
+See `requirements.txt` for a full list of dependencies.
 
 ## Installation
 
@@ -43,7 +29,7 @@ This is an Inventory Management System developed using Python, PySimpleGUI, and 
     ```
 3. Install the required Python packages:
     ```bash
-    pip install requirements.txt
+    pip install -r requirements.txt
     ```
 
 ## Usage
@@ -53,24 +39,29 @@ This is an Inventory Management System developed using Python, PySimpleGUI, and 
     ```bash
     python main.py
     ```
-3. In the GUI, you can:
-    - Enter a product code, supplier product code, or product description to retrieve and display product information.
-    - Deliver a product by entering the quantity and clicking "Deliver". This will register the delivery and generate a batch/lot number.
-    - Process a product by selecting it from the inventory table and clicking "Process". This updates the product's status and moves it to the appropriate department.
-    - View detailed inventory information by clicking "View Inventory".
+3. Log in using the provided credentials.
+4. In the GUI, you can:
+    - Search for products by description, product code, or supplier product code.
+    - Receive a product by entering the required information and clicking "Receive Product".
+    - View and manage the inventory, including processing products and generating barcodes.
+    - Generate traceability reports and export them as PDF or CSV.
 
 ## Code Overview
 
-- **load_data(file_path)**: Loads the product data from a CSV file.
-- **deliver_product(df, product_code, quantity)**: Registers the delivery of a product and generates a batch/lot number.
-- **process_product(product)**: Updates the product's status to "Processed" and logs its movement.
-- **generate_barcode(data)**: Generates a barcode for the provided data using the Code 128 standard.
-- **create_gui(df)**: Creates and manages the main GUI for the application.
-- **view_detailed_inventory(inventory)**: Displays detailed information about the inventory in a separate window.
+- **main.py**: Contains the main application logic, GUI creation, and inventory management functions.
+- **auth_system.py**: Implements the user authentication system.
 
-## Sub-Department Mapping
+Key functions include:
+- `create_gui(df)`: Creates and manages the main GUI for the application.
+- `deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system)`: Registers the delivery of a product.
+- `process_product(product, auth_system)`: Updates the product's status to "Processed" and logs its movement.
+- `view_detailed_inventory(inventory, auth_system)`: Displays detailed information about the inventory in a separate window.
+- `show_traceability_report(items)`: Generates and displays traceability reports.
 
-The application includes a predefined mapping of sub-department codes to names, which is used to categorize products during processing.
+## Support
+
+For support, feature requests, or bug reports, please contact:
+[Your Support Contact Information]
 
 ## License
 
