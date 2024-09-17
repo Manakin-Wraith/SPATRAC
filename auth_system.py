@@ -1,10 +1,11 @@
 import time
 
 class User:
-    def __init__(self, username, password, department=None):
+    def __init__(self, username, password, department=None, role=None):
         self.username = username
         self.password = password
         self.department = department
+        self.role = role
 
 class AuthSystem:
     def __init__(self):
@@ -12,8 +13,8 @@ class AuthSystem:
         self.current_user = None
         self.log = []
 
-    def add_user(self, username, password, department=None):
-        self.users[username] = User(username, password, department)
+    def add_user(self, username, password, department=None, role=None):
+        self.users[username] = User(username, password, department, role)
 
     def login(self, username, password):
         if username in self.users and self.users[username].password == password:
@@ -30,6 +31,9 @@ class AuthSystem:
     def get_current_user(self):
         return self.current_user.username if self.current_user else None
     
+    def get_current_user_role(self):
+        return self.current_user.role if self.current_user else None
+    
     def is_authenticated(self):
         return self.current_user is not None
 
@@ -44,6 +48,9 @@ class AuthSystem:
             return result
         print(f"User {username} not found in the system")
         return False
+    
+    def is_butchery_manager(self):
+        return self.current_user and self.current_user.department == '2' and self.current_user.role == 'Manager'
 
     def handle_delivery(self):
         if self.current_user:
