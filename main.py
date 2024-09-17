@@ -207,24 +207,31 @@ def show_login_window(auth_system):
         return False
         
 def create_butchery_window(inventory, auth_system):
-    processed_products = [item for item in inventory if item['Status'] == 'Processed' and item['Department'] == '2']  # Assuming '2' represents Butchery
+    butchery_products = [item for item in inventory if item['Department'] == '2']  # Assuming '2' represents Butchery
     
+    print(f"Number of Butchery products: {len(butchery_products)}")  # Debugging line
+    
+    if not butchery_products:
+        sg.popup("No Butchery products available.")
+        return
+
     layout = [
         [sg.Text('Butchery Department', font=FONT_HEADER, pad=PAD)],
-        [sg.Table(values=[[p['Product Code'], p['Product Description'], p['Quantity'], p['Unit']] for p in processed_products],
-                  headings=['Product Code', 'Description', 'Quantity', 'Unit'],
+        [sg.Table(values=[[p['Product Code'], p['Product Description'], p['Quantity'], p['Unit'], p['Status']] for p in butchery_products],
+                  headings=['Product Code', 'Description', 'Quantity', 'Unit', 'Status'],
                   display_row_numbers=False,
-                  auto_size_columns=True,
-                  num_rows=min(25, len(processed_products)),
+                  auto_size_columns=False,
+                  col_widths=[15, 40, 10, 10, 15],
+                  num_rows=min(25, len(butchery_products)),
                   key='-BUTCHERY_TABLE-',
                   enable_events=True,
                   select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],
-        [sg.Button('Select as Ingredient', pad=PAD),
+        [sg.Button('Process Selected', pad=PAD),
          sg.Button('Create New Product', pad=PAD),
          sg.Button('Close', pad=PAD)]
     ]
 
-    window = sg.Window('Butchery Department', layout, resizable=True, size=(800, 600))
+    window = sg.Window('Butchery Department', layout, resizable=True, size=(1000, 600))
 
     selected_ingredients = []
 
@@ -232,6 +239,17 @@ def create_butchery_window(inventory, auth_system):
         event, values = window.read()
         if event == sg.WIN_CLOSED or event == 'Close':
             break
+
+        if event == 'Process Selected':
+            selected_rows = values['-BUTCHERY_TABLE-']
+            for row in selected_rows:
+                product = butchery_products[row]
+                if product['Status'] != 'Processed':
+                    processed_product = process_product(product, auth_system)
+                    butchery_products[row] = processed_product
+                    inventory[inventory.index(product)] = processed_product
+            window['-BUTCHERY_TABLE-'].update([[p['Product Code'], p['Product Description'], p['Quantity'], p['Unit'], p['Status']] for p in butchery_products])
+            sg.popup(f"Processed {len(selected_rows)} products.")
 
         if event == 'Select as Ingredient':
             selected_rows = values['-BUTCHERY_TABLE-']
