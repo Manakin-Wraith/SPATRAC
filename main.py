@@ -331,6 +331,9 @@ def create_gui(df):
 
         sg.theme('LightBlue2')  # Change theme for a fresh look
 
+        user_info = auth_system.get_current_user_info()
+        user_info_text = f"User: {user_info['username']} | Role: {user_info['role']} | Department: {user_info['department']}"
+
         # Search and Product Info Column
         left_column = [
             [sg.Frame('Search', [
@@ -373,6 +376,7 @@ def create_gui(df):
         # Main Layout
         layout = [
             [sg.Text('SPATRAC Inventory Management System', font=FONT_HEADER, justification='center', expand_x=True)],
+            [sg.Text(user_info_text, font=FONT_SMALL, justification='right', expand_x=True)],
             [sg.Column(left_column, vertical_alignment='top'), 
              sg.VSeperator(),
              sg.Column(right_column, vertical_alignment='top', expand_x=True, expand_y=True)],
@@ -538,7 +542,7 @@ def department_manager_login(auth_system):
         event, values = window.read()
         if event in (sg.WIN_CLOSED, 'Cancel'):
             window.close()
-            return False, None, None
+            return False, None, None, None  # Update here to return four values
 
         if event == 'Login':
             username = values['-USERNAME-']
@@ -551,14 +555,15 @@ def department_manager_login(auth_system):
                 if user and user.department == selected_department:
                     sg.popup('Login successful!')
                     window.close()
-                    return True, username, selected_department
+                    # Return login success, username, role, department
+                    return True, username, user.role, user.department  # Ensure user.role is defined
                 else:
                     sg.popup_error('You are not authorized for this department.')
             else:
                 sg.popup_error('Login failed. Please check your credentials and try again.')
     
         window.close()
-        return False, None, None
+        return False, None, None, None  # Ensure this matches the expected return
 
 # Detailed inventory view
 def view_detailed_inventory(inventory, auth_system):
@@ -578,9 +583,13 @@ def view_detailed_inventory(inventory, auth_system):
             item.get('Current Location', '')
         ]
         table_data.append(row)
+
+    user_info = auth_system.get_current_user_info()
+    user_info_text = f"Manager: {user_info['username']} | Role: {user_info['role']} | Department: {user_info['department']}"    
     
     layout = [
         [sg.Text('Detailed Inventory', font=FONT_HEADER, pad=PAD)],
+        [sg.Text(user_info_text, font=FONT_SMALL, justification='right', expand_x=True)],
         [sg.Table(values=table_data,
                   headings=headings,
                   display_row_numbers=False,
@@ -635,9 +644,9 @@ def view_detailed_inventory(inventory, auth_system):
                product = inventory[selected_index]
                print(f"Selected product department: {product['Department']}")
                if product['Status'] != 'Delivery Approved':
-                   login_success, username, department = department_manager_login(auth_system)
+                   login_success, username, role, department = department_manager_login(auth_system)
                    if login_success:
-                       print(f"Login successful for user: {username}, department: {department}")
+                       print(f"Login successful for user: {username}, role: {role}, department: {department}")
                        if auth_system.is_authorized(username, product['Department']):
                             temp_log = record_temperature_popup()
                             if temp_log:

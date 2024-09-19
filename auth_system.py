@@ -34,6 +34,16 @@ class AuthSystem:
     def get_current_user_role(self):
         return self.current_user.role if self.current_user else None
     
+    def get_current_user_info(self):
+        if self.current_user:
+         return {
+            'username': self.current_user.username,
+            'role': self.current_user.role,  # Assuming `user_role` is an attribute of the user model
+            'department': self.current_user.department
+        }
+        return None
+        
+    
     def is_authenticated(self):
         return self.current_user is not None
 
