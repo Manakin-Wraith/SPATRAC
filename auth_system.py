@@ -13,7 +13,7 @@ class AuthSystem:
         self.current_user = None
         self.log = []
 
-    def add_user(self, username, password, department=None, role=None):
+    def add_user(self, username, password, department, role):
         self.users[username] = User(username, password, department, role)
 
     def login(self, username, password):
@@ -36,43 +36,38 @@ class AuthSystem:
     
     def get_current_user_info(self):
         if self.current_user:
-         return {
-            'username': self.current_user.username,
-            'role': self.current_user.role,  # Assuming `user_role` is an attribute of the user model
-            'department': self.current_user.department
-        }
+            return {
+                'username': self.current_user.username,
+                'role': self.current_user.role,
+                'department': self.current_user.department
+            }
         return None
-        
     
     def is_authenticated(self):
         return self.current_user is not None
 
     def is_authorized(self, username, department):
-        print(f"Checking authorization for username: {username}, department: {department}")
         if username in self.users:
             user = self.users[username]
-            print(f"User's department: {user.department}")
-            print(f"Product's department: {department}")
-            result = user.department.lower().strip() == department.lower().strip()
-            print(f"Authorization result: {result}")
-            return result
-        print(f"User {username} not found in the system")
+            if user.role == 'Manager' and user.department == 'Delivery':
+                return True  # Delivery managers can handle all departments
+            return user.department == department
         return False
     
-    def is_butchery_manager(self):
-        return self.current_user and self.current_user.department == '2' and self.current_user.role == 'Manager'
+    def is_delivery_manager(self):
+        return self.current_user and self.current_user.role == 'Manager' and self.current_user.department == 'Delivery'
 
     def handle_delivery(self):
-        if self.current_user:
+        if self.current_user and self.is_delivery_manager():
             self.log.append(f"{time.ctime()}: {self.current_user.username} handled product delivery")
         else:
-            print("Error: No user logged in")
+            print("Error: No user logged in or user is not a delivery manager")
 
-    def process_product(self):
-        if self.current_user:
-            self.log.append(f"{time.ctime()}: {self.current_user.username} processed delivered product")
+    def process_product(self, department):
+        if self.current_user and self.is_authorized(self.current_user.username, department):
+            self.log.append(f"{time.ctime()}: {self.current_user.username} processed product for {department}")
         else:
-            print("Error: No user logged in")
+            print(f"Error: User not authorized to process products for {department}")
 
     def print_log(self):
         for entry in self.log:
