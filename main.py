@@ -179,6 +179,20 @@ def create_gui(df):
 
 def create_product_management_tab(df, departments):
     all_product_descriptions = sorted(df['Product Description'].unique().tolist())
+    
+    department_frames = []
+    for dept in departments:
+        frame_layout = [
+            [sg.Table(values=[],
+                      headings=['Product Code', 'Description', 'Quantity', 'Unit', 'Status'],
+                      display_row_numbers=False,
+                      auto_size_columns=True,
+                      num_rows=5,
+                      key=f'-{dept.upper()}_TABLE-',
+                      enable_events=True)]
+        ]
+        department_frames.append(sg.Frame(f'{dept} Window', frame_layout, key=f'-{dept.upper()}_FRAME-'))
+
     return [
         [sg.Frame('Product Selection', [
             [sg.Text('Product Description:', size=(15, 1)),
@@ -200,17 +214,10 @@ def create_product_management_tab(df, departments):
             [sg.Text('Sell by Date', size=(15, 1)),
              sg.Input(key='-SELL_BY_DATE-', size=(10, 1), default_text=datetime.now().strftime('%Y-%m-%d')),
              sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['secondary']))],
-            [sg.Button('Receive Product', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))]
+            [sg.Button('Receive Product', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Checkbox('Tag as Ingredient', key='-TAG_INGREDIENT-')]
         ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
-        [sg.Frame('Recently Received Products', [
-            [sg.Table(values=[],
-                      headings=['Product Code', 'Description', 'Quantity', 'Unit', 'Status'],
-                      display_row_numbers=False,
-                      auto_size_columns=True,
-                      num_rows=10,
-                      key='-RECENT_TABLE-',
-                      enable_events=True)]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)]
+        department_frames
     ]
 
 def create_inventory_tab():
@@ -248,13 +255,11 @@ def create_reports_tab():
          sg.Button('Save as CSV', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary']))]
     ]
 
-def handle_product_management_events(event, values, window, df, inventory, auth_system):
-    if event == '-PRODUCT_DESC-':
-        selected_description = values['-PRODUCT_DESC-']
-        if selected_description:
-            selected_product = df[df['Product Description'] == selected_description].iloc[0]
-            update_product_fields(window, selected_product)
+def get_search_suggestions(df, search_term):
+    suggestions = df[df['Product Description'].str.contains(search_term, case=False, na=False)]['Product Description'].tolist()
+    return suggestions[:10]  # Limit to top 10 suggestions
 
+def handle_product_management_events(event, values, window, df, inventory, auth_system):
     if event == '-SEARCH-':
         search_term = values['-SEARCH-']
         if search_term:
@@ -263,24 +268,31 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
         else:
             window['-SUGGESTIONS-'].update(values=[], visible=False)
 
-    if event == '-SUGGESTIONS-' and values['-SUGGESTIONS-']:
-        selected_suggestion = values['-SUGGESTIONS-'][0]
-        window['-PRODUCT_DESC-'].update(value=selected_suggestion)
-        window['-SUGGESTIONS-'].update(visible=False)
-        selected_product = df[df['Product Description'] == selected_suggestion].iloc[0]
-        update_product_fields(window, selected_product)
+    if event == '-SUGGESTIONS-':
+        if values['-SUGGESTIONS-']:
+            selected_product = values['-SUGGESTIONS-'][0]
+            window['-PRODUCT_DESC-'].update(value=selected_product)
+            window['-SUGGESTIONS-'].update(visible=False)
+            product_info = df[df['Product Description'] == selected_product].iloc[0]
+            window['-DEPARTMENT-'].update(product_info['Department'])
+            window['-PRODUCT-'].update(product_info['Product Code'])
+            window['-SUPPLIER_PRODUCT-'].update(product_info['Supplier Product Code'])
+    if event == '-PRODUCT_DESC-':
+        selected_product = values['-PRODUCT_DESC-']
+        if selected_product:
+            product_info = df[df['Product Description'] == selected_product].iloc[0]
+            window['-DEPARTMENT-'].update(product_info['Department'])
+            window['-PRODUCT-'].update(product_info['Product Code'])
+            window['-SUPPLIER_PRODUCT-'].update(product_info['Supplier Product Code'])
 
     if event == 'Search':
         search_term = values['-SEARCH-']
-        matching_products = df[df['Product Description'].str.contains(search_term, case=False, na=False)]
-        if len(matching_products) == 1:
-            selected_product = matching_products.iloc[0]
-            window['-PRODUCT_DESC-'].update(value=selected_product['Product Description'])
-            update_product_fields(window, selected_product)
-        elif len(matching_products) > 1:
-            sg.popup_error("Multiple products found. Please select from the dropdown or be more specific.")
+        if search_term:
+            suggestions = get_search_suggestions(df, search_term)
+            window['-PRODUCT_DESC-'].update(values=suggestions)
         else:
-            sg.popup_error("No matching product found.")
+            all_product_descriptions = sorted(df['Product Description'].unique().tolist())
+            window['-PRODUCT_DESC-'].update(values=all_product_descriptions)        
 
     if event == 'Receive Product':
         product_code = values['-PRODUCT-']
@@ -288,19 +300,31 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
         unit = values['-UNIT-']
         supplier_batch = values['-SUPPLIER_BATCH-']
         sell_by_date = values['-SELL_BY_DATE-']
+        is_ingredient = values['-TAG_INGREDIENT-']
 
         if product_code and quantity and supplier_batch and sell_by_date:
             product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system)
+            product['Is Ingredient'] = is_ingredient
             temp_log = record_temperature_popup()
             if temp_log:
                 product['Temperature Log'].append(temp_log)
             
             inventory.append(product)
-            update_recent_table(window, inventory)
             update_inventory_table(window, inventory)
+            update_department_tables(window, inventory)
             sg.popup('Product received successfully', font=FONT_NORMAL)
         else:
             sg.popup_error('Please fill in all required fields', font=FONT_NORMAL)
+
+# Add a new function to update department-specific tables
+def update_department_tables(window, inventory):
+    departments = ['HMR', 'Butchery', 'Bakery']
+    for dept in departments:
+        dept_inventory = [item for item in inventory if item['Department'].lower() == dept.lower()]
+        window[f'-{dept.upper()}_TABLE-'].update([
+            [item['Product Code'], item['Product Description'], item['Quantity'], item['Unit'], item['Status']]
+            for item in dept_inventory
+        ])
 
 def handle_inventory_events(event, values, window, inventory, auth_system):
     if event == 'View Details':
@@ -362,10 +386,6 @@ def update_product_fields(window, product):
     window['-PRODUCT-'].update(product['Product Code'])
     window['-SUPPLIER_PRODUCT-'].update(product['Supplier Product Code'])
     window['-DEPARTMENT-'].update(product['Department'])
-
-def update_recent_table(window, inventory):
-    recent_products = inventory[-10:]  # Get the last 10 products
-    window['-RECENT_TABLE-'].update([[item['Product Code'], item['Product Description'], item['Quantity'], item['Unit'], item['Status']] for item in recent_products])
 
 def update_inventory_table(window, inventory):
     window['-INVENTORY_TABLE-'].update([[item['Department'], item['Product Code'], item['Product Description'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
