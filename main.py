@@ -338,13 +338,10 @@ def handle_inventory_events(event, values, window, inventory, auth_system):
     if event == 'Process Selected':
         selected_rows = values['-INVENTORY_TABLE-']
         if selected_rows:
-            for idx in selected_rows:
-                product = inventory[idx]
-                if product['Status'] != 'Processed':
-                    processed_product = process_product(product, auth_system)
-                    inventory[idx] = processed_product
-            update_inventory_table(window, inventory)
-            sg.popup('Selected products processed successfully', font=FONT_NORMAL)
+            if auth_system.is_delivery_manager():
+                department_login_window(auth_system, inventory, selected_rows, window)
+            else:
+                process_selected_products(auth_system, inventory, selected_rows, window)
         else:
             sg.popup_error('Please select products to process', font=FONT_NORMAL)
 
@@ -355,6 +352,49 @@ def handle_inventory_events(event, values, window, inventory, auth_system):
             generate_and_show_barcode(selected_product)
         else:
             sg.popup_error('Please select a product to generate a barcode', font=FONT_NORMAL)
+
+def department_login_window(auth_system, inventory, selected_rows, main_window):
+    layout = [
+        [sg.Text('Department Manager Login', font=FONT_SUBHEADER)],
+        [sg.Text('Username:', size=(15, 1)), sg.Input(key='-USERNAME-')],
+        [sg.Text('Password:', size=(15, 1)), sg.Input(key='-PASSWORD-', password_char='*')],
+        [sg.Button('Login', button_color=(COLORS['text'], COLORS['primary'])),
+         sg.Button('Cancel', button_color=(COLORS['text'], COLORS['secondary']))]
+    ]
+    window = sg.Window('Department Manager Login', layout)
+
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Cancel'):
+            break
+        if event == 'Login':
+            username = values['-USERNAME-']
+            password = values['-PASSWORD-']
+            if auth_system.login(username, password):
+                window.close()
+                process_selected_products(auth_system, inventory, selected_rows, main_window)
+                auth_system.logout()
+                return
+            else:
+                sg.popup_error('Login failed. Please try again.')
+
+    window.close()
+
+def process_selected_products(auth_system, inventory, selected_rows, window):
+    user_info = auth_system.get_current_user_info()
+    if user_info['role'] == 'Manager':
+        for idx in selected_rows:
+            product = inventory[idx]
+            if product['Status'] != 'Processed' and auth_system.is_authorized(user_info['username'], product['Department']):
+                processed_product = process_product(product, auth_system)
+                processed_product['Processed By'] = f"{user_info['username']} ({user_info['role']})"
+                inventory[idx] = processed_product
+        update_inventory_table(window, inventory)
+        update_department_tables(window, inventory)
+        sg.popup('Selected products processed successfully', font=FONT_NORMAL)
+    else:
+        sg.popup_error('You are not authorized to process products', font=FONT_NORMAL)
+
 
 def handle_reports_events(event, values, window, inventory):
     if event == 'Generate Report':
@@ -403,6 +443,7 @@ def show_product_details(product):
         [sg.Multiline(product['Handling History'], size=(50, 5), disabled=True)],
         [sg.Text("Temperature Log:")],
         [sg.Multiline('\n'.join(product['Temperature Log']), size=(50, 5), disabled=True)],
+        [sg.Text(f"Processed By: {product.get('Processed By', 'N/A')}")],
         [sg.Button('Close')]
     ]
     window = sg.Window('Product Details', layout)
@@ -436,7 +477,8 @@ def generate_traceability_report(inventory, start_date, end_date):
             report += f"Batch/Lot: {item['Batch/Lot']}\n"
             report += f"Delivery Date: {item['Delivery Date']}\n"
             report += f"Current Status: {item['Status']}\n"
-            report += f"Current Location: {item['Current Location']}\n\n"
+            report += f"Current Location: {item['Current Location']}\n"
+            report += f"Processed By: {item.get('Processed By', 'N/A')}\n\n"
     return report
 
 def generate_inventory_summary(inventory, start_date, end_date):
@@ -489,8 +531,8 @@ def show_login_window(auth_system):
             else:
                 sg.popup_error('Login failed. Please try again.')
     
-    window.close()
-    return False
+        window.close()
+        return False
 
 def record_temperature_popup():
     locations = [
@@ -524,7 +566,7 @@ def record_temperature_popup():
             except ValueError:
                 sg.popup_error('Please enter a valid temperature', font=FONT_NORMAL)
     
-    window.close()
+        window.close()
 
 def generate_and_show_barcode(item):
     combined_batch = f"{item['Batch/Lot']}-{item['Supplier Batch No']}"
