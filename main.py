@@ -173,7 +173,7 @@ def create_gui(df):
 
             handle_product_management_events(event, values, window, df, inventory, auth_system)
             handle_inventory_events(event, values, window, inventory, auth_system)
-            handle_reports_events(event, values, window, inventory)
+            handle_reports_events(event, values, window, inventory, auth_system)  # Added auth_system
 
         window.close()
 
@@ -396,14 +396,14 @@ def process_selected_products(auth_system, inventory, selected_rows, window):
         sg.popup_error('You are not authorized to process products', font=FONT_NORMAL)
 
 
-def handle_reports_events(event, values, window, inventory):
+def handle_reports_events(event, values, window, inventory, auth_system):  # Added auth_system parameter
     if event == 'Generate Report':
         report_type = values['-REPORT_TYPE-']
         start_date = values['-START_DATE-']
         end_date = values['-END_DATE-']
         
         if report_type and start_date and end_date:
-            report = generate_report(inventory, report_type, start_date, end_date)
+            report = generate_report(inventory, report_type, start_date, end_date, auth_system)  # Pass auth_system
             window['-REPORT_PREVIEW-'].update(report)
         else:
             sg.popup_error('Please select report type and date range', font=FONT_NORMAL)
@@ -459,12 +459,12 @@ def show_product_details(product, auth_system):
             break
     window.close()
 
-def generate_report(inventory, report_type, start_date, end_date):
+def generate_report(inventory, report_type, start_date, end_date, auth_system):
     start_date = datetime.strptime(start_date, '%Y-%m-%d')
     end_date = datetime.strptime(end_date, '%Y-%m-%d')
     
     if report_type == 'Traceability':
-        return generate_traceability_report(inventory, start_date, end_date)
+        return generate_traceability_report(inventory, start_date, end_date, auth_system)
     elif report_type == 'Inventory Summary':
         return generate_inventory_summary(inventory, start_date, end_date)
     elif report_type == 'Temperature Log':
