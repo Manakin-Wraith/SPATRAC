@@ -215,7 +215,6 @@ def create_product_management_tab(df, departments):
              sg.Input(key='-SELL_BY_DATE-', size=(10, 1), default_text=datetime.now().strftime('%Y-%m-%d')),
              sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['secondary']))],
             [sg.Button('Receive Product', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Checkbox('Tag as Ingredient', key='-TAG_INGREDIENT-')]
         ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
         department_frames
     ]
@@ -236,6 +235,7 @@ def create_inventory_tab():
          sg.Button('Generate Barcode', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary']))]
     ]
 
+
 def create_reports_tab():
     return [
         [sg.Frame('Generate Reports', [
@@ -254,6 +254,28 @@ def create_reports_tab():
         [sg.Button('Save as PDF', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary'])),
          sg.Button('Save as CSV', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary']))]
     ]
+
+def create_department_window(department, processed_products, final_products):
+    layout = [
+        [sg.Text(f"{department} Processed Products", font=FONT_SUBHEADER)],
+        [sg.Table(values=processed_products,
+                  headings=['Product Code', 'Description', 'Quantity', 'Unit'],
+                  display_row_numbers=False,
+                  auto_size_columns=True,
+                  num_rows=10,
+                  key='-PROCESSED_TABLE-',
+                  enable_events=True)],
+        [sg.Text("Matched Final Products", font=FONT_SUBHEADER)],
+        [sg.Table(values=[],
+                  headings=['Final Product Code', 'Final Product Name', 'Ingredient Code', 'Ingredient Description', 'Required Quantity'],
+                  display_row_numbers=False,
+                  auto_size_columns=True,
+                  num_rows=10,
+                  key='-MATCHED_TABLE-')],
+        [sg.Button('Match Products', button_color=(COLORS['text'], COLORS['primary'])),
+         sg.Button('Close', button_color=(COLORS['text'], COLORS['secondary']))]
+    ]
+    return sg.Window(f"{department} Processing", layout, finalize=True)
 
 def get_search_suggestions(df, search_term):
     suggestions = df[df['Product Description'].str.contains(search_term, case=False, na=False)]['Product Description'].tolist()
@@ -300,11 +322,10 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
         unit = values['-UNIT-']
         supplier_batch = values['-SUPPLIER_BATCH-']
         sell_by_date = values['-SELL_BY_DATE-']
-        is_ingredient = values['-TAG_INGREDIENT-']
+        
 
         if product_code and quantity and supplier_batch and sell_by_date:
             product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system)
-            product['Is Ingredient'] = is_ingredient
             temp_log = record_temperature_popup()
             if temp_log:
                 product['Temperature Log'].append(temp_log)
@@ -338,8 +359,11 @@ def handle_inventory_events(event, values, window, inventory, auth_system):
     if event == 'Process Selected':
         selected_rows = values['-INVENTORY_TABLE-']
         if selected_rows:
-            if auth_system.is_delivery_manager():
-                department_login_window(auth_system, inventory, selected_rows, window)
+            user_info = auth_system.get_current_user_info()
+            if user_info is None:
+                sg.popup_error('Error: No user is currently logged in.', font=FONT_NORMAL)
+            elif user_info['role'] != 'Manager':
+                sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
             else:
                 process_selected_products(auth_system, inventory, selected_rows, window)
         else:
@@ -352,6 +376,7 @@ def handle_inventory_events(event, values, window, inventory, auth_system):
             generate_and_show_barcode(selected_product)
         else:
             sg.popup_error('Please select a product to generate a barcode', font=FONT_NORMAL)
+
 
 def department_login_window(auth_system, inventory, selected_rows, main_window):
     layout = [
@@ -382,18 +407,83 @@ def department_login_window(auth_system, inventory, selected_rows, main_window):
 
 def process_selected_products(auth_system, inventory, selected_rows, window):
     user_info = auth_system.get_current_user_info()
-    if user_info['role'] == 'Manager':
-        for idx in selected_rows:
-            product = inventory[idx]
-            if product['Status'] != 'Processed' and auth_system.is_authorized(user_info['username'], product['Department']):
-                processed_product = process_product(product, auth_system)
-                processed_product['Processed By'] = f"{user_info['username']} ({user_info['role']})"
-                inventory[idx] = processed_product
-        update_inventory_table(window, inventory)
-        update_department_tables(window, inventory)
+    if user_info is None:
+        sg.popup_error('Error: No user is currently logged in.', font=FONT_NORMAL)
+        return
+
+    if user_info['role'] != 'Manager':
+        sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
+        return
+
+    processed_products = []
+    for idx in selected_rows:
+        product = inventory[idx]
+        if product['Status'] != 'Processed' and auth_system.is_authorized(user_info['username'], product['Department']):
+            processed_product = process_product(product, auth_system)
+            processed_product['Processed By'] = f"{user_info['username']} ({user_info['role']})"
+            inventory[idx] = processed_product
+            processed_products.append([
+                processed_product['Product Code'],
+                processed_product['Product Description'],
+                processed_product['Quantity'],
+                processed_product['Unit']
+            ])
+    
+    update_inventory_table(window, inventory)
+    update_department_tables(window, inventory)
+    
+    if processed_products:
+        department = user_info['department']
+        final_products = load_final_products(department)
+        dept_window = create_department_window(department, processed_products, final_products)
+        handle_department_window(dept_window, processed_products, final_products)
+    
         sg.popup('Selected products processed successfully', font=FONT_NORMAL)
+
     else:
         sg.popup_error('You are not authorized to process products', font=FONT_NORMAL)
+
+def load_final_products(department):
+    # This is a placeholder. In a real application, you would load this data from a database or file.
+    final_products = {
+        'HMR': [
+            ['28820', 'FOOTLONG CHEESE GRILLER + CHIPS', '22585', 'SPAR SC CHS GRILLR F/LONG', '1'],
+            ['28820', 'FOOTLONG CHEESE GRILLER + CHIPS', '26734', 'SOFT HOTDOG ROLLS', '1'],
+            ['28820', 'FOOTLONG CHEESE GRILLER + CHIPS', '28442', 'GARLIC MAYO', '0.02'],
+            ['28820', 'FOOTLONG CHEESE GRILLER + CHIPS', '26221', 'SPAR SC RUSTIC ST/H CHIPS', '0.06'],
+        ],
+        'BUTCHERY': [
+            ['26665', 'BABALAS BRAAI WORS', '28557', 'CHICKEN MDM', '25'],
+            ['26665', 'BABALAS BRAAI WORS', '28760', 'BEEF KIDNEY FAT', '25'],
+            ['26665', 'BABALAS BRAAI WORS', '29030', 'SPAR WATER', '30'],
+            ['26665', 'BABALAS BRAAI WORS', '30590', 'PARTY BRAAIWORS', '15'],
+        ],
+        'BAKERY': [
+            ['26710', 'WHITE BREAD', '15736', 'W/CAPE MILL MIX WHT BRD', '47.5'],
+            ['26710', 'WHITE BREAD', '28779', 'YEAST WET', '1'],
+            ['26710', 'WHITE BREAD', '29030', 'SPAR WATER', '24.7'],
+        ]
+    }
+    return final_products.get(department.upper(), [])
+
+
+def handle_department_window(window, processed_products, final_products):
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Close'):
+            break
+        elif event == 'Match Products':
+            matched_products = match_products(processed_products, final_products)
+            window['-MATCHED_TABLE-'].update(matched_products)
+    window.close()
+
+def match_products(processed_products, final_products):
+    matched = []
+    for final_product in final_products:
+        for processed in processed_products:
+            if processed[0] == final_product[3]:  # Match on ingredient code
+                matched.append(final_product)
+    return matched
 
 
 def handle_reports_events(event, values, window, inventory, auth_system):  # Added auth_system parameter
