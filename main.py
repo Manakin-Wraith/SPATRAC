@@ -46,6 +46,7 @@ def load_data(file_paths):
     combined_df.set_index('unique_id', inplace=True, drop=False)
     
     return combined_df
+    
 
 # Sub-department mapping
 SUB_DEPT_MAPPING = {
