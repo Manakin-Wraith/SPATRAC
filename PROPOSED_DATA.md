@@ -106,29 +106,6 @@ WHERE
 
 This database architecture provides a foundation for the SPATRAC system, ensuring data consistency, scalability, and support for reporting requirements. You can choose a database system like PostgreSQL, MySQL, or SQLite depending on your needs.  If you have Python and sqlite3 installed you can get started with:
 
-```python
-
-import sqlite3
-
-conn = sqlite3.connect('spatrac.db')  # Creates a new database file
-cursor = conn.cursor()
-
-# Create the tables (replace ... with the schema above)
-cursor.execute("CREATE TABLE Users (...);")
-# ... create other tables
-
-conn.commit()
-conn.close()
-
-```
-
-```Code execution output
-Traceback (most recent call last):
-  File "<string>", line 8, in <module>
-sqlite3.OperationalError: near ".": syntax error
-```
-You are right, I missed the column definitions in the example code.  Here's corrected Python code demonstrating creating the database tables:
-
 
 ```python
 
@@ -256,7 +233,7 @@ OK. The corrected code now includes the full SQL statements to create each table
 
 
 
-\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\INTEGRATION SUGGESTION\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\INTEGRATION SUGGESTION\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
 You're looking to integrate the recipe/ingredient information from your `DEPARTMENTS - RECIPES - ALL DEPT..csv` file into the SPATRAC system while maintaining a clean and user-friendly interface. Here's a revised approach that incorporates database integration and streamlines the workflow:
 
