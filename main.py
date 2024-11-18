@@ -116,10 +116,36 @@ def approve_delivery(product, auth_system):
 def process_product(product, auth_system):
     current_user = auth_system.get_current_user()  # This returns just the username
     processing_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Get temperature reading
+    temp_reading = record_temperature_popup()
+    if temp_reading is None:  # User cancelled temperature recording
+        return None
+    
+    # Format received info for history
+    received_info = (f"Originally received on {product['Received Date']} "
+                    f"by {product['Received By']} in {product['Department']}")
+    
+    # Update product status and tracking info
     product['Status'] = 'Processed'
     product['Processing Date'] = processing_date
-    product['Current Location'] = product['Department']  # Just use department as location
-    product['Handling History'] += f"\nProcessed at {processing_date} by {current_user} in {product['Department']}"
+    product['Current Location'] = product['Department']
+    
+    # Add detailed handling history with temperature
+    if not product.get('Handling History'):
+        product['Handling History'] = received_info
+    product['Handling History'] += (f"\nProcessed at {processing_date} "
+                                  f"by {current_user} in {product['Department']}\n"
+                                  f"Temperature reading: {temp_reading}\n"
+                                  f"Product journey: {received_info} → Processed")
+    
+    # Update temperature log
+    if not product.get('Temperature Log'):
+        product['Temperature Log'] = []
+    if isinstance(product['Temperature Log'], str):
+        product['Temperature Log'] = product['Temperature Log'].split('\n') if product['Temperature Log'] else []
+    product['Temperature Log'].append(f"{processing_date}: {temp_reading}")
+    
     return product
 
 # Barcode generation
