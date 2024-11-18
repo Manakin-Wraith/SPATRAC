@@ -57,6 +57,12 @@ class AuthSystem:
     def is_delivery_manager(self):
         return self.current_user and self.current_user.role == 'Manager' and self.current_user.department == 'Delivery'
 
+    def is_manager(self):
+        """Check if the current user has a manager role."""
+        if self.current_user and self.current_user.role:
+            return self.current_user.role.lower() == 'manager'
+        return False
+
     def handle_delivery(self):
         if self.current_user and self.is_delivery_manager():
             self.log.append(f"{time.ctime()}: {self.current_user.username} handled product delivery")

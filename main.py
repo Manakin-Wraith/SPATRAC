@@ -168,7 +168,8 @@ def create_gui(df):
                 [sg.Tab('Product Management', create_product_management_tab(df, departments)),
                  sg.Tab('Receiving', create_inventory_tab()),
                  sg.Tab('Recipes', create_recipes_tab()),
-                 sg.Tab('Reports', create_reports_tab())]
+                 sg.Tab('Reports', create_reports_tab()),
+                 sg.Tab('Database Management', create_database_management_tab(), visible=auth_system.is_manager())]
             ], key='-TABGROUP-', expand_x=True, expand_y=True)],
             [sg.Button('Logout', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary'])),
              sg.Button('Exit', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']))]
@@ -191,6 +192,7 @@ def create_gui(df):
             handle_inventory_events(event, values, window, inventory, auth_system)
             handle_recipes_events(event, values, window, df)
             handle_reports_events(event, values, window, inventory, auth_system)  # Added auth_system
+            handle_database_management_events(event, values, window, inventory, auth_system)
 
         window.close()
 
@@ -253,26 +255,30 @@ def create_inventory_tab():
     return layout
 
 def create_reports_tab():
+    today = datetime.now()
     return [
         [sg.Frame('Generate Reports', [
             [sg.Text('Report Type:'),
              sg.Combo(['Inventory Summary', 'Traceability', 'Temperature Log'],
+                     default_value='Inventory Summary',
                      key='-REPORT_TYPE-', size=(20, 1))],
             [sg.Text('Date Range:')],
             [sg.Text('Start Date:'),
-             sg.Input(key='-START_DATE-', size=(20, 1)),
-             sg.CalendarButton('Select', target='-START_DATE-', format='%Y-%m-%d')],
+             sg.Input(key='-START_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
+             sg.CalendarButton('Select', target='-START_DATE-', format='%Y-%m-%d',
+                             button_color=(COLORS['text'], COLORS['primary']))],
             [sg.Text('End Date:'),
-             sg.Input(key='-END_DATE-', size=(20, 1)),
-             sg.CalendarButton('Select', target='-END_DATE-', format='%Y-%m-%d')],
-            [sg.Button('Generate Report', button_color=(COLORS['text'], COLORS['primary']))]
+             sg.Input(key='-END_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
+             sg.CalendarButton('Select', target='-END_DATE-', format='%Y-%m-%d',
+                             button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
+             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']))]
         ], relief=sg.RELIEF_SUNKEN, expand_x=True)],
         [sg.Frame('Report Preview', [
             [sg.Multiline(size=(80, 30), key='-REPORT_PREVIEW-', font=('Courier', 10),
                          background_color='white', text_color='black', expand_x=True, expand_y=True)]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
-        [sg.Button('Save as PDF', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary'])),
-         sg.Button('Save as CSV', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary']))]
+        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)]
     ]
 
 def create_recipes_tab():
@@ -737,37 +743,61 @@ def update_recipes_table(window):
     window['-RECIPES_TABLE-'].update(table_data)
 
 def handle_reports_events(event, values, window, inventory, auth_system):  # Added auth_system parameter
-    if event == 'Generate Report':
-        report_type = values['-REPORT_TYPE-']
-        start_date = values['-START_DATE-']
-        end_date = values['-END_DATE-']
-        
-        if report_type and start_date and end_date:
-            report = generate_report(inventory, report_type, start_date, end_date, auth_system)  # Pass auth_system
-            formatted_report = format_report_for_display(report, report_type, auth_system)
-            window['-REPORT_PREVIEW-'].update(formatted_report)
-        else:
-            sg.popup_error('Please select report type and date range', font=FONT_NORMAL)
+    try:
+        if event == '-GENERATE_REPORT-':
+            report_type = values['-REPORT_TYPE-']
+            start_date = values['-START_DATE-']
+            end_date = values['-END_DATE-']
+            
+            if not all([report_type, start_date, end_date]):
+                sg.popup_error('Please select report type and date range', font=FONT_NORMAL)
+                return
+                
+            try:
+                # Validate dates
+                datetime.strptime(start_date, '%Y-%m-%d')
+                datetime.strptime(end_date, '%Y-%m-%d')
+            except ValueError:
+                sg.popup_error('Invalid date format. Please use YYYY-MM-DD', font=FONT_NORMAL)
+                return
+                
+            try:
+                report = generate_report(inventory, report_type, start_date, end_date, auth_system)
+                formatted_report = format_report_for_display(report, report_type, auth_system)
+                window['-REPORT_PREVIEW-'].update(formatted_report)
+            except Exception as e:
+                sg.popup_error(f'Error generating report: {str(e)}', font=FONT_NORMAL)
 
-    if event == 'Save as PDF':
-        report = values['-REPORT_PREVIEW-']
-        if report:
+        elif event == '-SAVE_PDF-':
+            report = values['-REPORT_PREVIEW-']
+            if not report:
+                sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                return
+                
             filename = sg.popup_get_file('Save PDF as', save_as=True, file_types=(("PDF Files", "*.pdf"),))
             if filename:
-                save_as_pdf(report, filename)
-                sg.popup(f"Report saved as {filename}")
-        else:
-            sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                try:
+                    save_as_pdf(report, filename)
+                    sg.popup(f"Report saved as {filename}")
+                except Exception as e:
+                    sg.popup_error(f'Error saving PDF: {str(e)}', font=FONT_NORMAL)
 
-    if event == 'Save as CSV':
-        report = values['-REPORT_PREVIEW-']
-        if report:
+        elif event == '-SAVE_CSV-':
+            report = values['-REPORT_PREVIEW-']
+            if not report:
+                sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                return
+                
             filename = sg.popup_get_file('Save CSV as', save_as=True, file_types=(("CSV Files", "*.csv"),))
             if filename:
-                save_as_csv(report, filename)
-                sg.popup(f"Report saved as {filename}")
-        else:
-            sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                try:
+                    save_as_csv(report, filename)
+                    sg.popup(f"Report saved as {filename}")
+                except Exception as e:
+                    sg.popup_error(f'Error saving CSV: {str(e)}', font=FONT_NORMAL)
+                    
+    except Exception as e:
+        sg.popup_error(f'An unexpected error occurred: {str(e)}', font=FONT_NORMAL)
 
 def format_report_for_display(report_data, report_type, auth_system):
     user_info = auth_system.get_current_user_info()
@@ -894,96 +924,159 @@ def show_product_details(product, auth_system):
     window.close()
 
 def generate_report(inventory, report_type, start_date, end_date, auth_system):
-    if report_type == 'Traceability':
-        return generate_traceability_report(inventory, start_date, end_date, auth_system)
-    elif report_type == 'Inventory Summary':
-        return generate_inventory_summary(inventory, start_date, end_date, auth_system)
-    elif report_type == 'Temperature Log':
-        return generate_temperature_log(inventory, start_date, end_date, auth_system)
-    return []
+    try:
+        if not auth_system or not auth_system.get_current_user_info():
+            raise ValueError("User not authenticated")
+            
+        if report_type == 'Traceability':
+            return generate_traceability_report(inventory, start_date, end_date, auth_system)
+        elif report_type == 'Inventory Summary':
+            return generate_inventory_summary(inventory, start_date, end_date, auth_system)
+        elif report_type == 'Temperature Log':
+            return generate_temperature_log(inventory, start_date, end_date, auth_system)
+        else:
+            raise ValueError(f"Invalid report type: {report_type}")
+    except Exception as e:
+        raise Exception(f"Error generating report: {str(e)}")
 
 def generate_inventory_summary(inventory, start_date, end_date, auth_system):
-    current_user = auth_system.get_current_user_info()
-    department = current_user['department']
-    
-    conn = sqlite3.connect('spatrac.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT product_code, description, quantity, unit, supplier_batch, 
-               sell_by_date, received_date, received_by
-        FROM received_products
-        WHERE department = ? 
-        AND received_date BETWEEN ? AND ?
-        AND status = 'active'
-        ORDER BY received_date DESC
-    ''', (department, start_date, end_date))
-    
-    inventory_data = cursor.fetchall()
-    conn.close()
-    
-    report = []
-    for item in inventory_data:
-        report.append({
-            'Product Code': item[0],
-            'Description': item[1],
-            'Quantity': item[2],
-            'Unit': item[3],
-            'Supplier Batch': item[4],
-            'Sell By Date': item[5],
-            'Received Date': item[6],
-            'Received By': item[7],
-            'Department': department
-        })
-    
-    return report
+    try:
+        current_user = auth_system.get_current_user_info()
+        if not current_user:
+            raise ValueError("User information not available")
+            
+        department = current_user['department']
+        
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT product_code, description, quantity, unit, supplier_batch, 
+                   sell_by_date, received_date, received_by
+            FROM received_products
+            WHERE department = ? 
+            AND received_date BETWEEN ? AND ?
+            AND status = 'active'
+            ORDER BY received_date DESC
+        ''', (department, start_date, end_date))
+        
+        inventory_data = cursor.fetchall()
+        conn.close()
+        
+        if not inventory_data:
+            return [{
+                'Message': 'No inventory data found for the selected period',
+                'Department': department,
+                'Date Range': f'{start_date} to {end_date}'
+            }]
+        
+        report = []
+        for item in inventory_data:
+            report.append({
+                'Product Code': item[0],
+                'Description': item[1],
+                'Quantity': item[2],
+                'Unit': item[3],
+                'Supplier Batch': item[4],
+                'Sell By Date': item[5],
+                'Received Date': item[6],
+                'Received By': item[7],
+                'Department': department
+            })
+        
+        return report
+    except Exception as e:
+        raise Exception(f"Error generating inventory summary: {str(e)}")
 
 def generate_traceability_report(inventory, start_date, end_date, auth_system):
-    current_user = auth_system.get_current_user_info()
-    department = current_user['department']
-    
-    conn = sqlite3.connect('spatrac.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT product_code, description, supplier_batch, sell_by_date, 
-               received_date, received_by
-        FROM received_products
-        WHERE department = ? 
-        AND received_date BETWEEN ? AND ?
-        ORDER BY received_date DESC
-    ''', (department, start_date, end_date))
-    
-    trace_data = cursor.fetchall()
-    conn.close()
-    
-    report = []
-    for item in trace_data:
-        report.append({
-            'Product Code': item[0],
-            'Description': item[1],
-            'Supplier Batch': item[2],
-            'Sell By Date': item[3],
-            'Received Date': item[4],
-            'Received By': item[5],
-            'Department': department
-        })
-    
-    return report
+    try:
+        current_user = auth_system.get_current_user_info()
+        if not current_user:
+            raise ValueError("User information not available")
+            
+        department = current_user['department']
+        
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT product_code, description, supplier_batch, sell_by_date, 
+                   received_date, received_by, status
+            FROM received_products
+            WHERE department = ? 
+            AND received_date BETWEEN ? AND ?
+            ORDER BY received_date DESC
+        ''', (department, start_date, end_date))
+        
+        trace_data = cursor.fetchall()
+        conn.close()
+        
+        if not trace_data:
+            return [{
+                'Message': 'No traceability data found for the selected period',
+                'Department': department,
+                'Date Range': f'{start_date} to {end_date}'
+            }]
+        
+        report = []
+        for item in trace_data:
+            report.append({
+                'Product Code': item[0],
+                'Description': item[1],
+                'Supplier Batch': item[2],
+                'Sell By Date': item[3],
+                'Received Date': item[4],
+                'Received By': item[5],
+                'Status': item[6],
+                'Department': department
+            })
+        
+        return report
+    except Exception as e:
+        raise Exception(f"Error generating traceability report: {str(e)}")
 
 def generate_temperature_log(inventory, start_date, end_date, auth_system):
-    current_user = auth_system.get_current_user_info()
-    department = current_user['department']
-    
-    # This is a placeholder. In a real application, you would fetch temperature logs from a database
-    return [
-        {
-            'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'Department': department,
-            'Temperature': '4.2°C',
-            'Recorded By': current_user['username']
-        }
-    ]
+    try:
+        current_user = auth_system.get_current_user_info()
+        if not current_user:
+            raise ValueError("User information not available")
+            
+        department = current_user['department']
+        
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        # Assuming we have a temperature_logs table
+        cursor.execute('''
+            SELECT recorded_date, temperature, recorded_by
+            FROM temperature_logs
+            WHERE department = ? 
+            AND recorded_date BETWEEN ? AND ?
+            ORDER BY recorded_date DESC
+        ''', (department, start_date, end_date))
+        
+        temp_data = cursor.fetchall()
+        conn.close()
+        
+        if not temp_data:
+            return [{
+                'Message': 'No temperature logs found for the selected period',
+                'Department': department,
+                'Date Range': f'{start_date} to {end_date}'
+            }]
+        
+        report = []
+        for item in temp_data:
+            report.append({
+                'Date': item[0],
+                'Department': department,
+                'Temperature': f"{item[1]}°C",
+                'Recorded By': item[2]
+            })
+        
+        return report
+    except Exception as e:
+        raise Exception(f"Error generating temperature log: {str(e)}")
 
 def show_login_window(auth_system):
     layout = [
@@ -1161,6 +1254,187 @@ def get_department_inventory(department):
     conn.close()
     
     return inventory
+
+def create_database_management_tab():
+    today = datetime.now()
+    layout = [
+        [sg.Text('Database Management', font=FONT_HEADER, justification='center', expand_x=True)],
+        [sg.Frame('Search Records', [
+            [sg.Text('Date Range:')],
+            [sg.Text('From:'), 
+             sg.Input(key='-DB-START-DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), enable_events=True),
+             sg.CalendarButton('Choose', target='-DB-START-DATE-', format='%Y-%m-%d', 
+                             button_color=(COLORS['text'], COLORS['primary']), key='-DB-START-CAL-'),
+             sg.Text('To:'), 
+             sg.Input(key='-DB-END-DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), enable_events=True),
+             sg.CalendarButton('Choose', target='-DB-END-DATE-', format='%Y-%m-%d',
+                             button_color=(COLORS['text'], COLORS['primary']), key='-DB-END-CAL-')],
+            [sg.Text('Department:'), 
+             sg.Combo(['All', 'Butchery', 'Bakery', 'HMR'], default_value='All', key='-DB-DEPT-', size=(20,1))],
+            [sg.Text('Product Code:'), sg.Input(key='-DB-PRODUCT-CODE-', size=(20,1))],
+            [sg.Button('Search', key='-DB-SEARCH-', button_color=(COLORS['text'], COLORS['primary']))]
+        ])],
+        [sg.Frame('Results', [
+            [sg.Table(
+                values=[], 
+                headings=['Date', 'Product', 'Department', 'Quantity', 'Status', 'Batch', 'Description'],
+                auto_size_columns=True,
+                justification='left',
+                num_rows=10,
+                key='-DB-TABLE-',
+                enable_events=True
+            )]
+        ])],
+        [sg.Frame('Export Options', [
+            [sg.Button('Export to CSV', key='-DB-EXPORT-CSV-', button_color=(COLORS['text'], COLORS['secondary'])),
+             sg.Button('Export to PDF', key='-DB-EXPORT-PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
+             sg.Button('View Details', key='-DB-VIEW-DETAILS-', button_color=(COLORS['text'], COLORS['primary']))]
+        ])]
+    ]
+    return layout
+
+def handle_database_management_events(event, values, window, inventory, auth_system):
+    if not auth_system.is_manager():
+        sg.popup_error('Access Denied', 'Only managers can access database management features.')
+        return
+
+    if event == '-DB-SEARCH-':
+        try:
+            # Query database based on search criteria
+            conn = sqlite3.connect('spatrac.db')
+            cursor = conn.cursor()
+            
+            query = '''
+                SELECT received_date, product_code, department, quantity, status, supplier_batch, description
+                FROM received_products
+                WHERE 1=1
+            '''
+            params = []
+            
+            if values['-DB-START-DATE-']:
+                query += ' AND received_date >= ?'
+                params.append(values['-DB-START-DATE-'])
+            if values['-DB-END-DATE-']:
+                query += ' AND received_date <= ?'
+                params.append(values['-DB-END-DATE-'])
+            if values['-DB-DEPT-'] != 'All':
+                query += ' AND department = ?'
+                params.append(values['-DB-DEPT-'])
+            if values['-DB-PRODUCT-CODE-']:
+                query += ' AND product_code LIKE ?'
+                params.append(f"%{values['-DB-PRODUCT-CODE-']}%")
+                
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            window['-DB-TABLE-'].update(values=results)
+            conn.close()
+        except Exception as e:
+            sg.popup_error('Database Error', f'Error searching database: {str(e)}')
+
+    elif event == '-DB-EXPORT-CSV-':
+        if not window['-DB-TABLE-'].get():
+            sg.popup_error('No Data', 'Please perform a search first.')
+            return
+        filename = sg.popup_get_file('Save CSV As', save_as=True, file_types=(("CSV Files", "*.csv"),))
+        if filename:
+            try:
+                with open(filename, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Date', 'Product', 'Department', 'Quantity', 'Status', 'Batch', 'Description'])
+                    writer.writerows(window['-DB-TABLE-'].get())
+                sg.popup('Success', f'Report saved as {filename}')
+            except Exception as e:
+                sg.popup_error('Export Error', f'Error saving CSV: {str(e)}')
+
+    elif event == '-DB-EXPORT-PDF-':
+        if not window['-DB-TABLE-'].get():
+            sg.popup_error('No Data', 'Please perform a search first.')
+            return
+        filename = sg.popup_get_file('Save PDF As', save_as=True, file_types=(("PDF Files", "*.pdf"),))
+        if filename:
+            try:
+                pdf = FPDF()
+                pdf.add_page()
+                pdf.set_font("Arial", size=12)
+                pdf.cell(200, 10, txt="Database Report", ln=1, align='C')
+                
+                # Add table headers
+                headers = ['Date', 'Product', 'Department', 'Quantity', 'Status', 'Batch', 'Description']
+                col_width = 25
+                for header in headers:
+                    pdf.cell(col_width, 10, txt=header, border=1)
+                pdf.ln()
+                
+                # Add data rows
+                for row in window['-DB-TABLE-'].get():
+                    for item in row:
+                        pdf.cell(col_width, 10, txt=str(item)[:20], border=1)
+                    pdf.ln()
+                
+                pdf.output(filename)
+                sg.popup('Success', f'Report saved as {filename}')
+            except Exception as e:
+                sg.popup_error('Export Error', f'Error saving PDF: {str(e)}')
+
+    elif event == '-DB-VIEW-DETAILS-':
+        try:
+            selected_rows = window['-DB-TABLE-'].SelectedRows
+            if not selected_rows:
+                sg.popup_error('No Selection', 'Please select a record to view details.')
+                return
+            
+            table_data = window['-DB-TABLE-'].Values  # Get all table data
+            if not table_data:
+                sg.popup_error('No Data', 'No data available to view.')
+                return
+                
+            selected_row = table_data[selected_rows[0]]  # Get the selected row data
+            if not selected_row:
+                sg.popup_error('Invalid Selection', 'Could not retrieve selected record.')
+                return
+                
+            # Create a dictionary with the product details
+            product_details = {
+                'received_date': selected_row[0],
+                'product_code': selected_row[1],
+                'department': selected_row[2],
+                'quantity': selected_row[3],
+                'status': selected_row[4],
+                'supplier_batch': selected_row[5],
+                'description': selected_row[6] if len(selected_row) > 6 else 'N/A'
+            }
+            
+            show_database_product_details(product_details, auth_system)
+        except Exception as e:
+            sg.popup_error('Error', f'An error occurred while viewing details: {str(e)}')
+
+def show_database_product_details(product, auth_system):
+    """Display product details from database records."""
+    user_info = auth_system.get_current_user_info()
+    manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
+    
+    layout = [
+        [sg.Text("Product Details", font=FONT_SUBHEADER, justification='center')],
+        [sg.Text("─" * 50)],
+        [sg.Text(f"Product Code: {product['product_code']}")],
+        [sg.Text(f"Department: {product['department']}")],
+        [sg.Text(f"Quantity: {product['quantity']}")],
+        [sg.Text(f"Status: {product['status']}")],
+        [sg.Text(f"Supplier Batch: {product['supplier_batch']}")],
+        [sg.Text(f"Received Date: {product['received_date']}")],
+        [sg.Text("─" * 50)],
+        [sg.Text(manager_info, font=FONT_SMALL)],
+        [sg.Button('Close', button_color=(COLORS['text'], COLORS['secondary']), bind_return_key=True)]
+    ]
+    
+    window = sg.Window('Product Details', layout, modal=True, finalize=True, element_justification='center')
+    
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, 'Close'):
+            break
+    
+    window.close()
 
 if __name__ == "__main__":
     file_paths = ['Butchery reports Big G.csv', 'Bakery Big G.csv', 'HMR Big G.csv']
