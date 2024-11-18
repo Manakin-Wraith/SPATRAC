@@ -8,6 +8,8 @@ from barcode.writer import ImageWriter
 import io
 from PIL import Image
 from auth_system import AuthSystem
+import json
+import sqlite3
 
 # Constants
 FONT_HEADER = ('Helvetica', 24)
@@ -68,6 +70,15 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
     product = df[df['Product Code'] == product_code].iloc[0]
     batch_lot = f'LOT-{datetime.now().strftime("%Y%m%d")}-{product_code}'
     current_user = auth_system.get_current_user()
+    product_dict = {
+        'Product Code': product_code,
+        'Description': product['Product Description'],
+        'Quantity': quantity,
+        'Unit': unit,
+        'Supplier Batch': supplier_batch,
+        'Sell By Date': sell_by_date
+    }
+    add_received_product(product_dict, auth_system)
     return {
         'Product Code': product_code,
         'Supplier Product Code': product['Supplier Product Code'],
@@ -129,6 +140,9 @@ def get_search_suggestions(df, search_term):
 
 # Modified create_gui function
 def create_gui(df):
+    # Initialize the database
+    initialize_database()
+    
     auth_system = AuthSystem()
     auth_system.add_user("john", "password123", "Delivery", "Manager")
     auth_system.add_user("jane", "securepass456", "Bakery", "Manager")
@@ -153,6 +167,7 @@ def create_gui(df):
             [sg.TabGroup([
                 [sg.Tab('Product Management', create_product_management_tab(df, departments)),
                  sg.Tab('Inventory', create_inventory_tab()),
+                 sg.Tab('Recipes', create_recipes_tab()),
                  sg.Tab('Reports', create_reports_tab())]
             ], key='-TABGROUP-', expand_x=True, expand_y=True)],
             [sg.Button('Logout', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary'])),
@@ -174,6 +189,7 @@ def create_gui(df):
 
             handle_product_management_events(event, values, window, df, inventory, auth_system)
             handle_inventory_events(event, values, window, inventory, auth_system)
+            handle_recipes_events(event, values, window, df)
             handle_reports_events(event, values, window, inventory, auth_system)  # Added auth_system
 
         window.close()
@@ -221,40 +237,74 @@ def create_product_management_tab(df, departments):
     ]
 
 def create_inventory_tab():
-    return [
-        [sg.Frame('Inventory Overview', [
-            [sg.Table(values=[],
-                      headings=['Department', 'Product Code', 'Description', 'Quantity', 'Unit', 'Status'],
-                      display_row_numbers=False,
-                      auto_size_columns=True,
-                      num_rows=15,
-                      key='-INVENTORY_TABLE-',
-                      enable_events=True)]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
-        [sg.Button('View Details', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary'])),
-         sg.Button('Process Selected', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary'])),
-         sg.Button('Generate Barcode', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary']))]
+    layout = [
+        [sg.Text('Inventory Overview', font=FONT_HEADER)],
+        [sg.Table(values=[],
+                 headings=['Product Code', 'Description', 'Quantity', 'Unit', 
+                          'Supplier Batch', 'Sell By Date', 'Received Date', 'Received By'],
+                 auto_size_columns=True,
+                 display_row_numbers=False,
+                 justification='left',
+                 num_rows=20,
+                 key='-INVENTORY_TABLE-',
+                 enable_events=True)],
+        [sg.Button('Refresh', button_color=(COLORS['text'], COLORS['primary']))]
     ]
-
+    return layout
 
 def create_reports_tab():
     return [
         [sg.Frame('Generate Reports', [
             [sg.Text('Report Type:'),
-             sg.Combo(['Traceability', 'Inventory Summary', 'Temperature Log'], key='-REPORT_TYPE-', size=(20, 1))],
-            [sg.Text('Date Range:'),
-             sg.Input(key='-START_DATE-', size=(10, 1)),
-             sg.CalendarButton('Start Date', target='-START_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['secondary'])),
-             sg.Input(key='-END_DATE-', size=(10, 1)),
-             sg.CalendarButton('End Date', target='-END_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['secondary']))],
-            [sg.Button('Generate Report', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
+             sg.Combo(['Inventory Summary', 'Traceability', 'Temperature Log'],
+                     key='-REPORT_TYPE-', size=(20, 1))],
+            [sg.Text('Date Range:')],
+            [sg.Text('Start Date:'),
+             sg.Input(key='-START_DATE-', size=(20, 1)),
+             sg.CalendarButton('Select', target='-START_DATE-', format='%Y-%m-%d')],
+            [sg.Text('End Date:'),
+             sg.Input(key='-END_DATE-', size=(20, 1)),
+             sg.CalendarButton('Select', target='-END_DATE-', format='%Y-%m-%d')],
+            [sg.Button('Generate Report', button_color=(COLORS['text'], COLORS['primary']))]
+        ], relief=sg.RELIEF_SUNKEN, expand_x=True)],
         [sg.Frame('Report Preview', [
-            [sg.Multiline(size=(80, 20), key='-REPORT_PREVIEW-', disabled=True)]
+            [sg.Multiline(size=(80, 30), key='-REPORT_PREVIEW-', font=('Courier', 10),
+                         background_color='white', text_color='black', expand_x=True, expand_y=True)]
         ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
         [sg.Button('Save as PDF', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary'])),
          sg.Button('Save as CSV', size=(15, 1), button_color=(COLORS['text'], COLORS['secondary']))]
     ]
+
+def create_recipes_tab():
+    layout = [
+        [sg.Text("Recipes Management", font=FONT_HEADER)],
+        [sg.Frame("Add/Edit Recipe", [
+            [sg.Text("Recipe Code:"), sg.Input(key='-RECIPE_CODE-', size=(15, 1)),
+             sg.Text("Recipe Name:"), sg.Input(key='-RECIPE_NAME-', size=(30, 1))],
+            [sg.Text("Department:"), 
+             sg.Combo(['HMR', 'BUTCHERY', 'BAKERY'], key='-RECIPE_DEPT-', size=(15, 1))],
+            [sg.Frame("Ingredients", [
+                [sg.Text("Ingredient Code:"), sg.Input(key='-ING_CODE-', size=(15, 1)),
+                 sg.Text("Quantity:"), sg.Input(key='-ING_QTY-', size=(10, 1))],
+                [sg.Button('Add Ingredient', button_color=(COLORS['text'], COLORS['primary'])),
+                 sg.Button('Remove Selected', button_color=(COLORS['text'], COLORS['secondary']))],
+                [sg.Table(values=[], headings=['Ingredient Code', 'Description', 'Quantity', 'Pack Deliver'],
+                         key='-INGREDIENTS_TABLE-', auto_size_columns=True,
+                         enable_events=True, num_rows=5)]
+            ])],
+            [sg.Button('Save Recipe', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Clear', button_color=(COLORS['text'], COLORS['secondary']))]
+        ])],
+        [sg.Frame("Recipe List", [
+            [sg.Table(values=[], 
+                     headings=['Recipe Code', 'Recipe Name', 'Department', '# of Ingredients'],
+                     key='-RECIPES_TABLE-',
+                     auto_size_columns=True,
+                     enable_events=True,
+                     num_rows=10)]
+        ])]
+    ]
+    return layout
 
 def create_department_window(department, processed_products, final_products):
     layout = [
@@ -349,6 +399,25 @@ def update_department_tables(window, inventory):
         ])
 
 def handle_inventory_events(event, values, window, inventory, auth_system):
+    if event == 'Refresh':
+        # Get current user's department
+        current_user = auth_system.get_current_user_info()
+        department_inventory = get_department_inventory(current_user['department'])
+        
+        # Convert to display format
+        inventory_display = [[
+            row[0],  # Product Code
+            row[1],  # Description
+            row[2],  # Quantity
+            row[3],  # Unit
+            row[4],  # Supplier Batch
+            row[5],  # Sell By Date
+            row[6],  # Received Date
+            row[7]   # Received By
+        ] for row in department_inventory]
+        
+        window['-INVENTORY_TABLE-'].update(inventory_display)
+
     if event == 'View Details':
         selected_rows = values['-INVENTORY_TABLE-']
         if selected_rows:
@@ -467,7 +536,6 @@ def load_final_products(department):
     }
     return final_products.get(department.upper(), [])
 
-
 def handle_department_window(window, processed_products, final_products):
     while True:
         event, values = window.read()
@@ -480,12 +548,193 @@ def handle_department_window(window, processed_products, final_products):
 
 def match_products(processed_products, final_products):
     matched = []
-    for final_product in final_products:
-        for processed in processed_products:
-            if processed[0] == final_product[3]:  # Match on ingredient code
-                matched.append(final_product)
+    for processed in processed_products:
+        processed_code = processed[0]  # Get the ingredient code
+        # Find all recipes that use this ingredient
+        for final_product in final_products:
+            if processed_code == final_product[2]:  # Check if ingredient code matches
+                # Create a row with all necessary information
+                matched.append([
+                    final_product[0],  # Final Product Code
+                    final_product[1],  # Final Product Name
+                    processed_code,    # Ingredient Code
+                    processed[1],      # Ingredient Description
+                    final_product[4]   # Required Quantity
+                ])
     return matched
 
+
+def handle_recipes_events(event, values, window, df):
+    if event == '__TIMEOUT__':
+        update_recipes_table(window)
+        return
+
+    if event == 'Add Ingredient':
+        ing_code = values['-ING_CODE-']
+        ing_qty = values['-ING_QTY-']
+        if ing_code and ing_qty:
+            # Get ingredient description from the main products dataframe
+            ing_desc = df[df['Product Code'] == ing_code]['Description'].iloc[0] if not df[df['Product Code'] == ing_code].empty else 'Unknown'
+            current_ingredients = window['-INGREDIENTS_TABLE-'].get()
+            current_ingredients.append([ing_code, ing_desc, ing_qty, 'P/KG'])  # Added default Pack Deliver
+            window['-INGREDIENTS_TABLE-'].update(current_ingredients)
+            window['-ING_CODE-'].update('')
+            window['-ING_QTY-'].update('')
+    
+    elif event == '-RECIPES_TABLE-':
+        selected_rows = values['-RECIPES_TABLE-']
+        if selected_rows:
+            recipe = load_recipe_by_index(selected_rows[0])
+            if recipe:
+                window['-RECIPE_CODE-'].update(recipe['code'])
+                window['-RECIPE_NAME-'].update(recipe['name'])
+                window['-RECIPE_DEPT-'].update(recipe['department'])
+                # Update ingredients table with all columns
+                ingredients_data = [[ing[0], ing[1], ing[2]] for ing in recipe['ingredients']]
+                window['-INGREDIENTS_TABLE-'].update(ingredients_data)
+    
+    elif event == 'Save Recipe':
+        recipe_code = values['-RECIPE_CODE-']
+        recipe_name = values['-RECIPE_NAME-']
+        department = values['-RECIPE_DEPT-']
+        ingredients = window['-INGREDIENTS_TABLE-'].get()
+        
+        if recipe_code and recipe_name and department and ingredients:
+            recipe = {
+                'code': recipe_code,
+                'name': recipe_name,
+                'department': department,
+                'ingredients': [[ing[0], ing[1], ing[2], 'P/KG'] for ing in ingredients]
+            }
+            save_recipe(recipe)
+            update_recipes_table(window)
+            # Clear the form
+            window['-RECIPE_CODE-'].update('')
+            window['-RECIPE_NAME-'].update('')
+            window['-RECIPE_DEPT-'].update('')
+            window['-INGREDIENTS_TABLE-'].update([])
+    
+    elif event == 'Clear':
+        window['-RECIPE_CODE-'].update('')
+        window['-RECIPE_NAME-'].update('')
+        window['-RECIPE_DEPT-'].update('')
+        window['-INGREDIENTS_TABLE-'].update([])
+
+def load_recipes_from_csv():
+    recipes = {}
+    try:
+        df = pd.read_csv('DEPARTMENTS - RECIPES - ALL DEPT..csv')
+        
+        # Initialize variables for tracking current recipe
+        current_dept = None
+        current_recipe = None
+        current_ingredients = []
+        
+        for _, row in df.iterrows():
+            # If we have a new recipe (non-empty Final Product Code)
+            if pd.notna(row['Final Product Code']):
+                # Save previous recipe if exists
+                if current_recipe is not None:
+                    if current_dept not in recipes:
+                        recipes[current_dept] = []
+                    recipes[current_dept].append(current_recipe)
+                
+                # Start new recipe
+                current_dept = row['Department']
+                current_recipe = {
+                    'code': str(row['Final Product Code']),
+                    'name': row['Final Product Name'],
+                    'department': row['Department'],
+                    'ingredients': []
+                }
+                current_ingredients = []
+            
+            # Add ingredient to current recipe
+            if pd.notna(row['Ingredient Prod Code']):
+                ingredient = [
+                    str(row['Ingredient Prod Code']),
+                    str(row['Ingredient Description']),
+                    str(row['Recipe']) if pd.notna(row['Recipe']) else '0',
+                    str(row['Pack Deliver']) if pd.notna(row['Pack Deliver']) else 'P/KG'
+                ]
+                current_recipe['ingredients'].append(ingredient)
+        
+        # Add the last recipe
+        if current_recipe is not None:
+            if current_dept not in recipes:
+                recipes[current_dept] = []
+            recipes[current_dept].append(current_recipe)
+            
+    except Exception as e:
+        print(f"Error loading recipes from CSV: {e}")
+        return {}
+    
+    return recipes
+
+def save_recipe(recipe):
+    recipes = load_all_recipes()
+    department = recipe['department']
+    
+    if department not in recipes:
+        recipes[department] = []
+    
+    # Update existing recipe or add new one
+    updated = False
+    for i, existing_recipe in enumerate(recipes[department]):
+        if existing_recipe['code'] == recipe['code']:
+            recipes[department][i] = recipe
+            updated = True
+            break
+    
+    if not updated:
+        recipes[department].append(recipe)
+    
+    # Convert to DataFrame format
+    rows = []
+    for dept, dept_recipes in recipes.items():
+        for r in dept_recipes:
+            first_row = True
+            for ing in r['ingredients']:
+                rows.append({
+                    'Department': dept if first_row else '',
+                    'Final Product Code': r['code'] if first_row else '',
+                    'Final Product Name': r['name'] if first_row else '',
+                    'Ingredient Prod Code': ing[0],
+                    'Ingredient Description': ing[1],
+                    'Pack Deliver': ing[3],
+                    'Weight': ing[2],
+                    'Recipe': ing[2]
+                })
+                first_row = False
+    
+    # Save to CSV
+    df = pd.DataFrame(rows)
+    df.to_csv('DEPARTMENTS - RECIPES - ALL DEPT..csv', index=False)
+
+def load_all_recipes():
+    try:
+        return load_recipes_from_csv()
+    except Exception as e:
+        print(f"Error loading recipes: {e}")
+        return {}
+
+def load_recipe_by_index(index):
+    recipes = load_all_recipes()
+    all_recipes = []
+    for dept_recipes in recipes.values():
+        all_recipes.extend(dept_recipes)
+    
+    if 0 <= index < len(all_recipes):
+        return all_recipes[index]
+    return None
+
+def update_recipes_table(window):
+    recipes = load_all_recipes()
+    table_data = []
+    for dept_recipes in recipes.values():
+        for r in dept_recipes:
+            table_data.append([r['code'], r['name'], r['department'], len(r['ingredients'])])
+    window['-RECIPES_TABLE-'].update(table_data)
 
 def handle_reports_events(event, values, window, inventory, auth_system):  # Added auth_system parameter
     if event == 'Generate Report':
@@ -495,23 +744,117 @@ def handle_reports_events(event, values, window, inventory, auth_system):  # Add
         
         if report_type and start_date and end_date:
             report = generate_report(inventory, report_type, start_date, end_date, auth_system)  # Pass auth_system
-            window['-REPORT_PREVIEW-'].update(report)
+            formatted_report = format_report_for_display(report, report_type, auth_system)
+            window['-REPORT_PREVIEW-'].update(formatted_report)
         else:
             sg.popup_error('Please select report type and date range', font=FONT_NORMAL)
 
     if event == 'Save as PDF':
         report = values['-REPORT_PREVIEW-']
         if report:
-            save_as_pdf(report)
+            filename = sg.popup_get_file('Save PDF as', save_as=True, file_types=(("PDF Files", "*.pdf"),))
+            if filename:
+                save_as_pdf(report, filename)
+                sg.popup(f"Report saved as {filename}")
         else:
             sg.popup_error('Please generate a report first', font=FONT_NORMAL)
 
     if event == 'Save as CSV':
         report = values['-REPORT_PREVIEW-']
         if report:
-            save_as_csv(inventory)
+            filename = sg.popup_get_file('Save CSV as', save_as=True, file_types=(("CSV Files", "*.csv"),))
+            if filename:
+                save_as_csv(report, filename)
+                sg.popup(f"Report saved as {filename}")
         else:
             sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+
+def format_report_for_display(report_data, report_type, auth_system):
+    user_info = auth_system.get_current_user_info()
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    header = f"""
+╔══════════════════════════════════════════════════════════════════════════════
+║ SPATRAC - {report_type}
+║ Department: {user_info['department']}
+║ Generated by: {user_info['username']} ({user_info['role']})
+║ Date: {current_time}
+╚══════════════════════════════════════════════════════════════════════════════
+
+"""
+    
+    if report_type == 'Inventory Summary':
+        # Group items by product code for summary
+        summary = {}
+        total_items = 0
+        total_quantity = 0
+        
+        for item in report_data:
+            code = item['Product Code']
+            if code not in summary:
+                summary[code] = {
+                    'description': item['Description'],
+                    'quantity': 0,
+                    'unit': item['Unit']
+                }
+            summary[code]['quantity'] += float(item['Quantity'])
+            total_items += 1
+            total_quantity += float(item['Quantity'])
+        
+        body = f"""
+Summary Statistics:
+─────────────────────────────────────────────────────────────────
+Total Unique Products: {len(summary)}
+Total Items: {total_items}
+Total Quantity: {total_quantity}
+
+Detailed Inventory:
+─────────────────────────────────────────────────────────────────
+"""
+        
+        for code, data in summary.items():
+            body += f"""
+Product Code: {code}
+Description: {data['description']}
+Total Quantity: {data['quantity']} {data['unit']}
+─────────────────────────────────────────────────────────────────"""
+            
+    elif report_type == 'Traceability':
+        body = "Traceability Details:\n"
+        body += "─────────────────────────────────────────────────────────────────\n\n"
+        
+        for item in report_data:
+            body += f"""
+Product Information:
+• Code: {item['Product Code']}
+• Description: {item['Description']}
+• Batch: {item['Supplier Batch']}
+• Sell By: {item['Sell By Date']}
+
+Tracking Information:
+• Received: {item['Received Date']}
+• Received By: {item['Received By']}
+─────────────────────────────────────────────────────────────────"""
+            
+    elif report_type == 'Temperature Log':
+        body = "Temperature Log Entries:\n"
+        body += "─────────────────────────────────────────────────────────────────\n\n"
+        
+        for log in report_data:
+            body += f"""
+Date: {log['Date']}
+Temperature: {log['Temperature']}
+Recorded By: {log['Recorded By']}
+─────────────────────────────────────────────────────────────────"""
+    
+    footer = f"""
+
+Report End
+Generated by SPATRAC System
+{current_time}
+"""
+    
+    return header + body + footer
 
 def update_product_fields(window, product):
     window['-PRODUCT-'].update(product['Product Code'])
@@ -551,78 +894,96 @@ def show_product_details(product, auth_system):
     window.close()
 
 def generate_report(inventory, report_type, start_date, end_date, auth_system):
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')
-    
     if report_type == 'Traceability':
         return generate_traceability_report(inventory, start_date, end_date, auth_system)
     elif report_type == 'Inventory Summary':
-        return generate_inventory_summary(inventory, start_date, end_date)
+        return generate_inventory_summary(inventory, start_date, end_date, auth_system)
     elif report_type == 'Temperature Log':
-        return generate_temperature_log(inventory, start_date, end_date)
-    else:
-        return "Invalid report type"
-
-def generate_traceability_report(inventory, start_date, end_date, auth_system):
-    user_info = auth_system.get_current_user_info()
-    manager_info = f"Report Generated by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Report Generated by: N/A"
-    
-    report = f"Traceability Report\n"
-    report += f"{manager_info}\n"
-    report += f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    
-    for item in inventory:
-        delivery_date = datetime.strptime(item['Delivery Date'], '%Y-%m-%d %H:%M:%S')
-        if start_date <= delivery_date <= end_date:
-            report += f"Product: {item['Product Description']}\n"
-            report += f"Product Code: {item['Product Code']}\n"
-            report += f"Supplier: {item['Supplier']}\n"
-            report += f"Batch/Lot: {item['Batch/Lot']}\n"
-            report += f"Delivery Date: {item['Delivery Date']}\n"
-            report += f"Current Status: {item['Status']}\n"
-            report += f"Current Location: {item['Current Location']}\n"
-            report += f"Processed By: {item.get('Processed By', 'N/A')}\n\n"
-    return report
+        return generate_temperature_log(inventory, start_date, end_date, auth_system)
+    return []
 
 def generate_inventory_summary(inventory, start_date, end_date, auth_system):
-    user_info = auth_system.get_current_user_info()
-    manager_info = f"Report Generated by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Report Generated by: N/A"
+    current_user = auth_system.get_current_user_info()
+    department = current_user['department']
     
-    summary = {}
-    for item in inventory:
-        delivery_date = datetime.strptime(item['Delivery Date'], '%Y-%m-%d %H:%M:%S')
-        if start_date <= delivery_date <= end_date:
-            dept = item['Department']
-            if dept not in summary:
-                summary[dept] = {'total_items': 0, 'total_quantity': 0}
-            summary[dept]['total_items'] += 1
-            summary[dept]['total_quantity'] += float(item['Quantity'])
+    conn = sqlite3.connect('spatrac.db')
+    cursor = conn.cursor()
     
-    report = f"Inventory Summary Report\n"
-    report += f"{manager_info}\n"
-    report += f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    cursor.execute('''
+        SELECT product_code, description, quantity, unit, supplier_batch, 
+               sell_by_date, received_date, received_by
+        FROM received_products
+        WHERE department = ? 
+        AND received_date BETWEEN ? AND ?
+        AND status = 'active'
+        ORDER BY received_date DESC
+    ''', (department, start_date, end_date))
     
-    for dept, data in summary.items():
-        report += f"Department: {dept}\n"
-        report += f"Total Items: {data['total_items']}\n"
-        report += f"Total Quantity: {data['total_quantity']}\n\n"
+    inventory_data = cursor.fetchall()
+    conn.close()
+    
+    report = []
+    for item in inventory_data:
+        report.append({
+            'Product Code': item[0],
+            'Description': item[1],
+            'Quantity': item[2],
+            'Unit': item[3],
+            'Supplier Batch': item[4],
+            'Sell By Date': item[5],
+            'Received Date': item[6],
+            'Received By': item[7],
+            'Department': department
+        })
+    
+    return report
+
+def generate_traceability_report(inventory, start_date, end_date, auth_system):
+    current_user = auth_system.get_current_user_info()
+    department = current_user['department']
+    
+    conn = sqlite3.connect('spatrac.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT product_code, description, supplier_batch, sell_by_date, 
+               received_date, received_by
+        FROM received_products
+        WHERE department = ? 
+        AND received_date BETWEEN ? AND ?
+        ORDER BY received_date DESC
+    ''', (department, start_date, end_date))
+    
+    trace_data = cursor.fetchall()
+    conn.close()
+    
+    report = []
+    for item in trace_data:
+        report.append({
+            'Product Code': item[0],
+            'Description': item[1],
+            'Supplier Batch': item[2],
+            'Sell By Date': item[3],
+            'Received Date': item[4],
+            'Received By': item[5],
+            'Department': department
+        })
+    
     return report
 
 def generate_temperature_log(inventory, start_date, end_date, auth_system):
-    user_info = auth_system.get_current_user_info()
-    manager_info = f"Report Generated by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Report Generated by: N/A"
+    current_user = auth_system.get_current_user_info()
+    department = current_user['department']
     
-    report = f"Temperature Log Report\n"
-    report += f"{manager_info}\n"
-    report += f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    
-    for item in inventory:
-        for log in item['Temperature Log']:
-            log_date = datetime.strptime(log.split(':')[0], '%Y-%m-%d %H:%M:%S')
-            if start_date <= log_date <= end_date:
-                report += f"Product: {item['Product Description']}\n"
-                report += f"Log: {log}\n\n"
-    return report
+    # This is a placeholder. In a real application, you would fetch temperature logs from a database
+    return [
+        {
+            'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'Department': department,
+            'Temperature': '4.2°C',
+            'Recorded By': current_user['username']
+        }
+    ]
 
 def show_login_window(auth_system):
     layout = [
@@ -714,24 +1075,92 @@ def save_barcode(image, item):
         image.save(filename)
         sg.popup(f"Barcode saved as {filename}")
 
-def save_as_pdf(report):
-    filename = sg.popup_get_file('Save PDF as', save_as=True, file_types=(("PDF Files", "*.pdf"),))
-    if filename:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
-        pdf.multi_cell(0, 10, report)
-        pdf.output(filename)
-        sg.popup(f"Report saved as {filename}")
+def save_as_pdf(report, filename):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Courier", size=10)
+    
+    # Split content into lines and write to PDF
+    lines = report.split('\n')
+    for line in lines:
+        # Remove any special characters used for formatting in the preview
+        clean_line = line.replace('║', '|').replace('╔', '+').replace('╚', '+').replace('─', '-')
+        pdf.cell(0, 5, txt=clean_line, ln=True)
+    
+    pdf.output(filename)
 
-def save_as_csv(inventory):
-    filename = sg.popup_get_file('Save CSV as', save_as=True, file_types=(("CSV Files", "*.csv"),))
-    if filename:
-        with open(filename, 'w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=inventory[0].keys())
-            writer.writeheader()
-            writer.writerows(inventory)
-        sg.popup(f"Report saved as {filename}")
+def save_as_csv(report, filename):
+    with open(filename, 'w', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=report[0].keys())
+        writer.writeheader()
+        writer.writerows(report)
+
+def initialize_database():
+    conn = sqlite3.connect('spatrac.db')
+    cursor = conn.cursor()
+    
+    # Create received products table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS received_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_code TEXT,
+            description TEXT,
+            quantity REAL,
+            unit TEXT,
+            department TEXT,
+            received_by TEXT,
+            received_date DATETIME,
+            supplier_batch TEXT,
+            sell_by_date TEXT,
+            status TEXT DEFAULT 'active'
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+def add_received_product(product, auth_system):
+    conn = sqlite3.connect('spatrac.db')
+    cursor = conn.cursor()
+    
+    current_user = auth_system.get_current_user_info()
+    
+    cursor.execute('''
+        INSERT INTO received_products 
+        (product_code, description, quantity, unit, department, received_by, 
+         received_date, supplier_batch, sell_by_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        product['Product Code'],
+        product['Description'],
+        product['Quantity'],
+        product['Unit'],
+        current_user['department'],
+        current_user['username'],
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        product.get('Supplier Batch', ''),
+        product.get('Sell By Date', '')
+    ))
+    
+    conn.commit()
+    conn.close()
+
+def get_department_inventory(department):
+    conn = sqlite3.connect('spatrac.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT product_code, description, quantity, unit, supplier_batch, 
+               sell_by_date, received_date, received_by
+        FROM received_products
+        WHERE department = ? AND status = 'active'
+        ORDER BY received_date DESC
+    ''', (department,))
+    
+    inventory = cursor.fetchall()
+    conn.close()
+    
+    return inventory
 
 if __name__ == "__main__":
     file_paths = ['Butchery reports Big G.csv', 'Bakery Big G.csv', 'HMR Big G.csv']
