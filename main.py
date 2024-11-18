@@ -908,7 +908,16 @@ def update_product_fields(window, product):
     window['-DEPARTMENT-'].update(product['Department'])
 
 def update_inventory_table(window, inventory):
-    window['-INVENTORY_TABLE-'].update([[item['Department'], item['Product Code'], item['Product Description'], item['Quantity'], item['Unit'], item['Status']] for item in inventory])
+    window['-INVENTORY_TABLE-'].update([[
+        item['Product Code'],
+        item['Product Description'],
+        item['Quantity'],
+        item['Unit'],
+        item['Supplier Batch No'],
+        item['Sell By Date'],
+        item['Received Date'],
+        item['Received By']
+    ] for item in inventory])
 
 def show_product_details(product, auth_system):
     # Get the current manager info
