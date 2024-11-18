@@ -166,7 +166,7 @@ def create_gui(df):
             [sg.Text(user_info_text, font=FONT_SMALL, justification='right', expand_x=True, pad=((0, 0), (0, 20)))],
             [sg.TabGroup([
                 [sg.Tab('Product Management', create_product_management_tab(df, departments)),
-                 sg.Tab('Inventory', create_inventory_tab()),
+                 sg.Tab('Receiving', create_inventory_tab()),
                  sg.Tab('Recipes', create_recipes_tab()),
                  sg.Tab('Reports', create_reports_tab())]
             ], key='-TABGROUP-', expand_x=True, expand_y=True)],
