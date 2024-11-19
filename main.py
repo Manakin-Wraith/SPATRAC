@@ -69,16 +69,23 @@ SUB_DEPT_MAPPING = {
 def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system):
     product = df[df['Product Code'] == product_code].iloc[0]
     batch_lot = f'LOT-{datetime.now().strftime("%Y%m%d")}-{product_code}'
-    current_user = auth_system.get_current_user()
+    current_user = auth_system.get_current_user_info()
+    delivery_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Create the initial product dictionary with consistent key names
     product_dict = {
         'Product Code': product_code,
-        'Description': product['Product Description'],
+        'Product Description': product['Product Description'],
         'Quantity': quantity,
         'Unit': unit,
-        'Supplier Batch': supplier_batch,
-        'Sell By Date': sell_by_date
+        'Supplier Batch No': supplier_batch,
+        'Sell By Date': sell_by_date,
+        'Delivery Date': delivery_date,  # Added to maintain consistency
+        'Received By': current_user['username']  # Added to maintain consistency
     }
+    
     add_received_product(product_dict, auth_system)
+    
     return {
         'Product Code': product_code,
         'Supplier Product Code': product['Supplier Product Code'],
@@ -91,59 +98,58 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
         'Sub-Department': SUB_DEPT_MAPPING.get(str(product['Sub-Department']), ('Unknown', 'Unknown'))[1].strip(),
         'Quantity': quantity,
         'Unit': unit,
-        'Delivery Date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'Delivery Date': delivery_date,
         'Status': 'Delivered',
         'Processing Date': '',
         'Current Location': 'Receiving',
-        'Handling History': f'Received at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} by {current_user}',
+        'Handling History': f'Received at {delivery_date} by {current_user["username"]}',
         'Quality Checks': 'Initial check: Passed',
         'Temperature Log': [],
-        'Received By': current_user,
+        'Received By': current_user["username"],
         'Processed By': '',
         'Delivery Approved By': '',
         'Delivery Approval Date': ''
     }
 
 def approve_delivery(product, auth_system):
-    current_user = auth_system.get_current_user()
+    current_user = auth_system.get_current_user_info()
     approval_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     product['Status'] = 'Delivery Approved'
-    product['Delivery Approved By'] = current_user
+    product['Delivery Approved By'] = current_user["username"]
     product['Delivery Approval Date'] = approval_date
-    product['Handling History'] += f"\nDelivery approved at {approval_date} by {current_user}"
+    product['Handling History'] += f"\nDelivery approved at {approval_date} by {current_user['username']}"
     return product
 
 def process_product(product, auth_system):
-    current_user = auth_system.get_current_user()  # This returns just the username
+    current_user = auth_system.get_current_user_info()
     processing_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Get temperature reading
     temp_reading = record_temperature_popup()
     if temp_reading is None:  # User cancelled temperature recording
         return None
-    
-    # Format received info for history
-    received_info = (f"Originally received on {product['Received Date']} "
-                    f"by {product['Received By']} in {product['Department']}")
-    
-    # Update product status and tracking info
+        
+    # Update product status and details
     product['Status'] = 'Processed'
     product['Processing Date'] = processing_date
-    product['Current Location'] = product['Department']
+    product['Processed By'] = current_user['username']
+    product['Current Location'] = f"{product['Department']} Processing"
+    
+    # Create received info using Delivery Date
+    received_info = (f"Originally received on {product.get('Delivery Date', 'Unknown Date')} "
+                    f"by {product.get('Received By', 'Unknown')}")
     
     # Add detailed handling history with temperature
     if not product.get('Handling History'):
         product['Handling History'] = received_info
     product['Handling History'] += (f"\nProcessed at {processing_date} "
-                                  f"by {current_user} in {product['Department']}\n"
+                                  f"by {current_user['username']} in {product['Department']}\n"
                                   f"Temperature reading: {temp_reading}\n"
                                   f"Product journey: {received_info} → Processed")
     
     # Update temperature log
     if not product.get('Temperature Log'):
         product['Temperature Log'] = []
-    if isinstance(product['Temperature Log'], str):
-        product['Temperature Log'] = product['Temperature Log'].split('\n') if product['Temperature Log'] else []
     product['Temperature Log'].append(f"{processing_date}: {temp_reading}")
     
     return product
@@ -190,7 +196,7 @@ def create_gui(df):
             [sg.Text(user_info_text, font=FONT_SMALL, justification='right', expand_x=True, pad=((0, 0), (0, 20)))],
             [sg.TabGroup([
                 [sg.Tab('Product Management', create_product_management_tab(df, departments)),
-                 sg.Tab('Receiving', create_inventory_tab()),
+                 sg.Tab('Receiving', create_receiving_tab()),
                  sg.Tab('Recipes', create_recipes_tab()),
                  sg.Tab('Reports', create_reports_tab()),
                  sg.Tab('Database Management', create_database_management_tab(), visible=auth_system.is_manager())]
@@ -213,7 +219,7 @@ def create_gui(df):
                 break
 
             handle_product_management_events(event, values, window, df, inventory, auth_system)
-            handle_inventory_events(event, values, window, inventory, auth_system)
+            handle_receiving_events(event, values, window, inventory, auth_system)
             handle_recipes_events(event, values, window, df)
             handle_reports_events(event, values, window, inventory, auth_system)  # Added auth_system
             handle_database_management_events(event, values, window, inventory, auth_system)
@@ -262,52 +268,42 @@ def create_product_management_tab(df, departments):
         department_frames
     ]
 
-def create_inventory_tab():
+def create_receiving_tab():
     layout = [
-        [sg.Text('Inventory Overview', font=FONT_HEADER)],
-        [sg.Table(values=[],
-                 headings=['Product Code', 'Description', 'Quantity', 'Unit', 
-                          'Supplier Batch', 'Sell By Date', 'Received Date', 'Received By'],
-                 auto_size_columns=True,
-                 display_row_numbers=False,
-                 justification='left',
-                 num_rows=20,
-                 key='-INVENTORY_TABLE-',
-                 enable_events=True,
-                 select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],
-        [sg.Button('View Details', button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Process Selected', button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Generate Barcode', button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Refresh', button_color=(COLORS['text'], COLORS['secondary']))]
+        [sg.Text('Receiving Overview', font=FONT_HEADER)],
+        [sg.Column([
+            [sg.Text('Active Products', font=FONT_SUBHEADER)],
+            [sg.Table(values=[],
+                     headings=['Product Code', 'Description', 'Quantity', 'Unit', 
+                              'Supplier Batch', 'Sell By Date', 'Received Date', 'Received By'],
+                     auto_size_columns=True,
+                     display_row_numbers=False,
+                     justification='left',
+                     num_rows=15,
+                     key='-RECEIVING_TABLE-',
+                     enable_events=True,
+                     select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],
+            [sg.Button('View Details', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Process Selected', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Generate Barcode', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Refresh', button_color=(COLORS['text'], COLORS['secondary']))]
+        ], vertical_alignment='top'),
+        sg.Column([
+            [sg.Text('Processed Products', font=FONT_SUBHEADER)],
+            [sg.Table(values=[],
+                     headings=['Product Code', 'Description', 'Quantity', 'Unit', 
+                              'Processing Date', 'Processed By', 'Temperature', 'Status'],
+                     auto_size_columns=True,
+                     display_row_numbers=False,
+                     justification='left',
+                     num_rows=15,
+                     key='-PROCESSED_TABLE-',
+                     enable_events=True)],
+            [sg.Button('View Processed Details', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('View History', button_color=(COLORS['text'], COLORS['primary']))]
+        ], vertical_alignment='top')]
     ]
-    return layout
-
-def create_reports_tab():
-    today = datetime.now()
-    return [
-        [sg.Frame('Generate Reports', [
-            [sg.Text('Report Type:'),
-             sg.Combo(['Inventory Summary', 'Traceability', 'Temperature Log'],
-                     default_value='Inventory Summary',
-                     key='-REPORT_TYPE-', size=(20, 1))],
-            [sg.Text('Date Range:')],
-            [sg.Text('Start Date:'),
-             sg.Input(key='-START_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Select', target='-START_DATE-', format='%Y-%m-%d',
-                             button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Text('End Date:'),
-             sg.Input(key='-END_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Select', target='-END_DATE-', format='%Y-%m-%d',
-                             button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary'])),
-             sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
-             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']))]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True)],
-        [sg.Frame('Report Preview', [
-            [sg.Multiline(size=(80, 30), key='-REPORT_PREVIEW-', font=('Courier', 10),
-                         background_color='white', text_color='black', expand_x=True, expand_y=True)]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)]
-    ]
+    return layout  # Return just the layout instead of wrapping it in a Tab
 
 def create_recipes_tab():
     layout = [
@@ -432,65 +428,90 @@ def update_department_tables(window, inventory):
             for item in dept_inventory
         ])
 
-def handle_inventory_events(event, values, window, inventory, auth_system):
-    if event == 'Refresh':
+def handle_receiving_events(event, values, window, inventory, auth_system):
+    if event == '-RECEIVING_TABLE-':
+        return
+    
+    if event == 'View Details':
+        selected_rows = values['-RECEIVING_TABLE-']
+        if not selected_rows:
+            sg.popup('Please select a product to view details', font=FONT_NORMAL)
+            return
+        selected_product = inventory[selected_rows[0]]
+        show_product_details(selected_product, auth_system)
+    
+    elif event == 'View Processed Details':
+        selected_rows = values['-PROCESSED_TABLE-']
+        if not selected_rows:
+            sg.popup('Please select a processed product to view details', font=FONT_NORMAL)
+            return
+        # Filter processed items
+        processed_items = [item for item in inventory if item['Status'] == 'Processed']
+        selected_product = processed_items[selected_rows[0]]
+        show_product_details(selected_product, auth_system)
+    
+    elif event == 'View History':
+        selected_rows = values['-PROCESSED_TABLE-']
+        if not selected_rows:
+            sg.popup('Please select a product to view history', font=FONT_NORMAL)
+            return
+        processed_items = [item for item in inventory if item['Status'] == 'Processed']
+        selected_product = processed_items[selected_rows[0]]
+        layout = [
+            [sg.Text('Product History', font=FONT_HEADER)],
+            [sg.Text(f"Product: {selected_product['Product Description']}")],
+            [sg.Text('Handling History:')],
+            [sg.Multiline(selected_product.get('Handling History', 'No handling history available'), size=(60, 10), disabled=True)],
+            [sg.Text('Temperature Log:')],
+            [sg.Multiline('\n'.join(selected_product.get('Temperature Log', ['No temperature log available'])), size=(60, 5), disabled=True)],
+            [sg.Button('Close')]
+        ]
+        history_window = sg.Window('Product History', layout, modal=True)
+        while True:
+            hist_event, _ = history_window.read()
+            if hist_event in (sg.WIN_CLOSED, 'Close'):
+                break
+        history_window.close()
+    
+    elif event == 'Process Selected':
+        selected_rows = values['-RECEIVING_TABLE-']
+        if not selected_rows:
+            sg.popup('Please select products to process', font=FONT_NORMAL)
+            return
+        user_info = auth_system.get_current_user_info()
+        if not user_info or user_info['role'] != 'Manager':
+            sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
+        else:
+            process_selected_products(auth_system, inventory, selected_rows, window)
+            # Update both tables after processing
+            update_inventory_table(window, inventory)
+            update_processed_table(window, inventory)
+    
+    elif event == 'Generate Barcode':
+        selected_rows = values['-RECEIVING_TABLE-']
+        if not selected_rows:
+            sg.popup('Please select a product to generate barcode', font=FONT_NORMAL)
+            return
+        selected_product = inventory[selected_rows[0]]
+        generate_and_show_barcode(selected_product)
+    
+    elif event == 'Refresh':
         # Get current user's department
         current_user = auth_system.get_current_user_info()
         if current_user is None:
             sg.popup_error('Error: No user is currently logged in.', font=FONT_NORMAL)
             return
             
+        # Get fresh inventory data from database
         department_inventory = get_department_inventory(current_user['department'])
         
         # Update the inventory list
         inventory.clear()
         inventory.extend(department_inventory)
         
-        # Convert to display format
-        inventory_display = [[
-            item['Product Code'],      # Product Code
-            item['Product Description'], # Description
-            item['Quantity'],          # Quantity
-            item['Unit'],             # Unit
-            item['Supplier Batch No'], # Supplier Batch
-            item['Sell By Date'],     # Sell By Date
-            item['Received Date'],    # Received Date
-            item['Received By']       # Received By
-        ] for item in inventory]
-        
-        window['-INVENTORY_TABLE-'].update(inventory_display)
-
-    elif event == 'View Details':
-        selected_rows = values['-INVENTORY_TABLE-']
-        if not selected_rows:  # Check if no rows are selected
-            sg.popup_error('Please select a product to view details', font=FONT_NORMAL)
-            return
-            
-        selected_product = inventory[selected_rows[0]]
-        show_product_details(selected_product, auth_system)
-
-    elif event == 'Process Selected':
-        selected_rows = values['-INVENTORY_TABLE-']
-        if not selected_rows:  # Check if no rows are selected
-            sg.popup_error('Please select products to process', font=FONT_NORMAL)
-            return
-            
-        user_info = auth_system.get_current_user_info()
-        if user_info is None:
-            sg.popup_error('Error: No user is currently logged in.', font=FONT_NORMAL)
-        elif user_info['role'] != 'Manager':
-            sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
-        else:
-            process_selected_products(auth_system, inventory, selected_rows, window)
-
-    elif event == 'Generate Barcode':
-        selected_rows = values['-INVENTORY_TABLE-']
-        if not selected_rows:  # Check if no rows are selected
-            sg.popup_error('Please select a product to generate a barcode', font=FONT_NORMAL)
-            return
-            
-        selected_product = inventory[selected_rows[0]]
-        generate_and_show_barcode(selected_product)
+        # Update both tables
+        update_inventory_table(window, inventory)
+        update_processed_table(window, inventory)
 
 def department_login_window(auth_system, inventory, selected_rows, main_window):
     layout = [
@@ -635,7 +656,7 @@ def handle_recipes_events(event, values, window, df):
             window['-RECIPE_NAME-'].update('')
             window['-RECIPE_DEPT-'].update('')
             window['-INGREDIENTS_TABLE-'].update([])
-    
+
     elif event == 'Clear':
         window['-RECIPE_CODE-'].update('')
         window['-RECIPE_NAME-'].update('')
@@ -907,56 +928,70 @@ def update_product_fields(window, product):
     window['-SUPPLIER_PRODUCT-'].update(product['Supplier Product Code'])
     window['-DEPARTMENT-'].update(product['Department'])
 
+def update_processed_table(window, inventory):
+    # Filter processed items and format for display
+    processed_items = [item for item in inventory if item['Status'] == 'Processed']
+    window['-PROCESSED_TABLE-'].update([[
+        item['Product Code'],
+        item['Product Description'],
+        item['Quantity'],
+        item['Unit'],
+        item.get('Processing Date', 'N/A'),
+        item.get('Processed By', 'N/A'),
+        item.get('Temperature Log', [])[-1] if item.get('Temperature Log') else 'N/A',  # Latest temperature
+        item['Status']
+    ] for item in processed_items])
+
 def update_inventory_table(window, inventory):
-    window['-INVENTORY_TABLE-'].update([[
+    # Filter active (unprocessed) items
+    active_items = [item for item in inventory if item['Status'] != 'Processed']
+    window['-RECEIVING_TABLE-'].update([[
         item['Product Code'],
         item['Product Description'],
         item['Quantity'],
         item['Unit'],
         item['Supplier Batch No'],
         item['Sell By Date'],
-        item['Received Date'],
-        item['Received By']
-    ] for item in inventory])
+        item.get('Delivery Date', ''),  # Changed from 'Received Date' to 'Delivery Date'
+        item.get('Received By', '')
+    ] for item in active_items])
 
 def show_product_details(product, auth_system):
     # Get the current manager info
     user_info = auth_system.get_current_user_info()
     manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
     
-    # Set current location
-    current_location = f"{product['Department']}"
-    if 'Sub-Department' in product:
-        current_location += f" - {product['Sub-Department']}"
-    
     layout = [
-        [sg.Text(f"Product Details: {product['Product Description']}", font=FONT_SUBHEADER)],
+        [sg.Text('Product Details', font=FONT_HEADER)],
+        [sg.Text(manager_info, font=FONT_SMALL)],
         [sg.Text(f"Product Code: {product['Product Code']}")],
-        [sg.Text(f"Supplier Batch: {product['Supplier Batch No']}")],
+        [sg.Text(f"Product Description: {product['Product Description']}")],
         [sg.Text(f"Quantity: {product['Quantity']} {product['Unit']}")],
-        [sg.Text(f"Status: {product['Status']}")],
-        [sg.Text(f"Department: {product['Department']}")],
-        [sg.Text(f"Received Date: {product['Received Date']}")],
-        [sg.Text(f"Received By: {product['Received By']}")],
-        [sg.Text(f"Sell By Date: {product['Sell By Date']}")],
-        [sg.Text("Handling History:")],
-        [sg.Multiline(product['Handling History'], size=(50, 5), disabled=True)],
-        [sg.Text("Temperature Log:")],
-        [sg.Multiline('\n'.join(product['Temperature Log']), size=(50, 5), disabled=True)],
-        [sg.Text("─" * 50)],  # Divider line
-        [sg.Text(manager_info, font=('Helvetica', 10, 'italic'))],  # Manager info
-        [sg.Button('Generate Barcode', button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Close', button_color=(COLORS['text'], COLORS['secondary']))]
+        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
+        [sg.Text(f"Sell By Date: {product.get('Sell By Date', 'N/A')}")],
+        [sg.Text(f"Delivery Date: {product.get('Delivery Date', 'N/A')}")],  # Changed from Received Date
+        [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
+        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
+        [sg.Text(f"Current Location: {product.get('Current Location', 'N/A')}")],
+        [sg.Text(f"Processing Date: {product.get('Processing Date', 'N/A')}")],
+        [sg.Text(f"Processed By: {product.get('Processed By', 'N/A')}")],
+        [sg.Text(f"Delivery Approved By: {product.get('Delivery Approved By', 'N/A')}")],
+        [sg.Text(f"Delivery Approval Date: {product.get('Delivery Approval Date', 'N/A')}")],
+        [sg.Text('Handling History:')],
+        [sg.Multiline(product.get('Handling History', 'No handling history available'),
+                     size=(60, 5), disabled=True)],
+        [sg.Text('Temperature Log:')],
+        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])),
+                     size=(60, 3), disabled=True)],
+        [sg.Button('Close')]
     ]
     
-    window = sg.Window('Product Details', layout)
+    details_window = sg.Window('Product Details', layout, modal=True)
     while True:
-        event, values = window.read()
+        event, _ = details_window.read()
         if event in (sg.WIN_CLOSED, 'Close'):
             break
-        elif event == 'Generate Barcode':
-            generate_and_show_barcode(product)
-    window.close()
+    details_window.close()
 
 def generate_report(inventory, report_type, start_date, end_date, auth_system):
     try:
@@ -1283,13 +1318,13 @@ def add_received_product(product, auth_system):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         product['Product Code'],
-        product['Description'],
+        product['Product Description'],  # Changed from Description
         product['Quantity'],
         product['Unit'],
         current_user['department'],
         current_user['username'],
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        product.get('Supplier Batch', ''),
+        product.get('Supplier Batch No', ''),  # Changed from Supplier Batch
         product.get('Sell By Date', '')
     ))
     
@@ -1523,6 +1558,34 @@ def load_final_products(department):
             return list(reader)
     except FileNotFoundError:
         return []    
+
+def create_reports_tab():
+    today = datetime.now()
+    layout = [
+        [sg.Frame('Generate Reports', [
+            [sg.Text('Report Type:'),
+             sg.Combo(['Inventory Summary', 'Traceability', 'Temperature Log'],
+                     default_value='Inventory Summary',
+                     key='-REPORT_TYPE-', size=(20, 1))],
+            [sg.Text('Date Range:')],
+            [sg.Text('Start Date:'),
+             sg.Input(key='-START_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
+             sg.CalendarButton('Select', target='-START_DATE-', format='%Y-%m-%d',
+                             button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Text('End Date:'),
+             sg.Input(key='-END_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
+             sg.CalendarButton('Select', target='-END_DATE-', format='%Y-%m-%d',
+                             button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
+             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']))]
+        ], relief=sg.RELIEF_SUNKEN, expand_x=True)],
+        [sg.Frame('Report Preview', [
+            [sg.Multiline(size=(80, 30), key='-REPORT_PREVIEW-', font=('Courier', 10),
+                         background_color='white', text_color='black', expand_x=True, expand_y=True)]
+        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)]
+    ]
+    return layout
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
