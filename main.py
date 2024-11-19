@@ -585,12 +585,53 @@ def process_selected_products(auth_system, inventory, selected_products, window)
         product['Handling History'].append(
             f"Processed on {current_time} by {user_info['username']} ({user_info['role']} - {user_info['department']})"
         )
+        
+        # Update the database with the processed product information
+        update_product_in_database(product)
     
     # Update the display
     update_inventory_table(window, inventory)
     update_processed_table(window, inventory)
     
     sg.popup('Success', f'{len(selected_products)} products processed successfully', font=FONT_NORMAL)
+
+def update_product_in_database(product):
+    conn = sqlite3.connect('spatrac.db')
+    cursor = conn.cursor()
+    
+    # Convert handling history to string for storage if it's a list
+    handling_history = product['Handling History']
+    if isinstance(handling_history, list):
+        handling_history = '\n'.join(handling_history)
+    
+    cursor.execute('''
+        UPDATE received_products
+        SET status = ?,
+            handling_history = ?
+        WHERE product_code = ? AND supplier_batch = ?
+    ''', (
+        product['Status'],
+        handling_history,
+        product['Product Code'],
+        product.get('Supplier Batch No', '')
+    ))
+    
+    # Update processed_by and processing_date in a separate query if they exist
+    if product.get('Processed By') and product.get('Processing Date'):
+        cursor.execute('''
+            UPDATE received_products
+            SET processed_by = ?,
+                processing_date = ?
+            WHERE product_code = ? AND supplier_batch = ?
+        ''', (
+            product['Processed By'],
+            product['Processing Date'],
+            product['Product Code'],
+            product.get('Supplier Batch No', '')
+        ))
+    
+    conn.commit()
+    conn.close()
 
 def handle_department_window(window, processed_products, final_products):
     while True:
@@ -1358,7 +1399,9 @@ def initialize_database():
             sell_by_date TEXT,
             status TEXT DEFAULT 'active',
             handling_history TEXT DEFAULT '',
-            temperature_log TEXT DEFAULT ''
+            temperature_log TEXT DEFAULT '',
+            processed_by TEXT,
+            processing_date TEXT
         )
     ''')
     
@@ -1366,10 +1409,16 @@ def initialize_database():
     cursor.execute("PRAGMA table_info(received_products)")
     columns = [info[1] for info in cursor.fetchall()]
     
-    if 'handling_history' not in columns:
-        cursor.execute('ALTER TABLE received_products ADD COLUMN handling_history TEXT DEFAULT ""')
-    if 'temperature_log' not in columns:
-        cursor.execute('ALTER TABLE received_products ADD COLUMN temperature_log TEXT DEFAULT ""')
+    required_columns = {
+        'handling_history': 'TEXT DEFAULT ""',
+        'temperature_log': 'TEXT DEFAULT ""',
+        'processed_by': 'TEXT',
+        'processing_date': 'TEXT'
+    }
+    
+    for col_name, col_type in required_columns.items():
+        if col_name not in columns:
+            cursor.execute(f'ALTER TABLE received_products ADD COLUMN {col_name} {col_type}')
     
     conn.commit()
     conn.close()
