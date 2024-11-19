@@ -1564,8 +1564,10 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                 query += ' AND department = ?'
                 params.append(values['-DB-DEPT-'])
             if values['-DB-STATUS-'] != 'All':
+                # Convert status to match database value (Processed or active)
+                status = 'Processed' if values['-DB-STATUS-'] == 'Processed' else 'active'
                 query += ' AND status = ?'
-                params.append(values['-DB-STATUS-'].lower())
+                params.append(status)
             if values['-DB-PRODUCT-CODE-']:
                 query += ' AND product_code LIKE ?'
                 params.append(f"%{values['-DB-PRODUCT-CODE-']}%")
@@ -1595,7 +1597,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                     writer = csv.writer(f)
                     writer.writerow(['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'])
                     writer.writerows(window['-DB-TABLE-'].get())
-                sg.popup('Success', f'Report saved as {filename}')
+                sg.popup('Success', f"Report saved as {filename}")
             except Exception as e:
                 sg.popup_error('Export Error', f'Error saving CSV: {str(e)}')
 
@@ -1624,7 +1626,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                     pdf.ln()
                 
                 pdf.output(filename)
-                sg.popup('Success', f'Report saved as {filename}')
+                sg.popup('Success', f"Report saved as {filename}")
             except Exception as e:
                 sg.popup_error('Export Error', f'Error saving PDF: {str(e)}')
 
