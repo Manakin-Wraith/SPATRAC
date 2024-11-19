@@ -437,7 +437,8 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not selected_rows:
             sg.popup('Please select a product to view details', font=FONT_NORMAL)
             return
-        selected_product = inventory[selected_rows[0]]
+        # Use the stored active_items to get the correct product
+        selected_product = window.active_items[selected_rows[0]]
         show_product_details(selected_product, auth_system)
     
     elif event == 'View Processed Details':
@@ -445,9 +446,8 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not selected_rows:
             sg.popup('Please select a processed product to view details', font=FONT_NORMAL)
             return
-        # Filter processed items
-        processed_items = [item for item in inventory if item['Status'] == 'Processed']
-        selected_product = processed_items[selected_rows[0]]
+        # Use the stored processed_items to get the correct product
+        selected_product = window.processed_items[selected_rows[0]]
         show_product_details(selected_product, auth_system)
     
     elif event == 'View History':
@@ -455,8 +455,8 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not selected_rows:
             sg.popup('Please select a product to view history', font=FONT_NORMAL)
             return
-        processed_items = [item for item in inventory if item['Status'] == 'Processed']
-        selected_product = processed_items[selected_rows[0]]
+        # Use the stored processed_items to get the correct product
+        selected_product = window.processed_items[selected_rows[0]]
         layout = [
             [sg.Text('Product History', font=FONT_HEADER)],
             [sg.Text(f"Product: {selected_product['Product Description']}")],
@@ -482,7 +482,9 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not user_info or user_info['role'] != 'Manager':
             sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
         else:
-            process_selected_products(auth_system, inventory, selected_rows, window)
+            # Use the stored active_items to get the correct products
+            selected_products = [window.active_items[row] for row in selected_rows]
+            process_selected_products(auth_system, inventory, selected_products, window)
             # Update both tables after processing
             update_inventory_table(window, inventory)
             update_processed_table(window, inventory)
@@ -492,7 +494,8 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not selected_rows:
             sg.popup('Please select a product to generate barcode', font=FONT_NORMAL)
             return
-        selected_product = inventory[selected_rows[0]]
+        # Use the stored active_items to get the correct product
+        selected_product = window.active_items[selected_rows[0]]
         generate_and_show_barcode(selected_product)
     
     elif event == 'Refresh':
@@ -542,44 +545,52 @@ def department_login_window(auth_system, inventory, selected_rows, main_window):
 
     window.close()
 
-def process_selected_products(auth_system, inventory, selected_rows, window):
+def process_selected_products(auth_system, inventory, selected_products, window):
+    """
+    Process the selected products.
+    
+    Args:
+        auth_system: The authentication system
+        inventory: The full inventory list
+        selected_products: List of selected product dictionaries
+        window: The main window
+    """
     user_info = auth_system.get_current_user_info()
-    if user_info is None:
-        sg.popup_error('Error: No user is currently logged in.', font=FONT_NORMAL)
+    if not user_info:
         return
-
-    if user_info['role'] != 'Manager':
-        sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
-        return
-
-    processed_products = []
-    for idx in selected_rows:
-        product = inventory[idx]
-        if product['Status'] != 'Processed' and auth_system.is_authorized(user_info['username'], product['Department']):
-            processed_product = process_product(product, auth_system)
-            processed_product['Processed By'] = f"{user_info['username']} ({user_info['role']})"
-            inventory[idx] = processed_product
-            processed_products.append([
-                processed_product['Product Code'],
-                processed_product['Product Description'],
-                processed_product['Quantity'],
-                processed_product['Unit']
-            ])
+        
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
+    # Record temperature for each product
+    for product in selected_products:
+        temp_log = record_temperature_popup()
+        if temp_log:
+            if 'Temperature Log' not in product:
+                product['Temperature Log'] = []
+            product['Temperature Log'].append(temp_log)
+            
+        # Update product status and processing info
+        product['Status'] = 'Processed'
+        product['Processing Date'] = current_time
+        product['Processed By'] = user_info['username']
+        
+        # Handle Handling History - convert from string to list if needed
+        if 'Handling History' not in product:
+            product['Handling History'] = []
+        elif isinstance(product['Handling History'], str):
+            # If it's a string, convert it to a list with the existing history as the first item
+            product['Handling History'] = [product['Handling History']]
+            
+        # Add new history entry
+        product['Handling History'].append(
+            f"Processed on {current_time} by {user_info['username']} ({user_info['role']} - {user_info['department']})"
+        )
+    
+    # Update the display
     update_inventory_table(window, inventory)
-    update_department_tables(window, inventory)
+    update_processed_table(window, inventory)
     
-    if processed_products:
-        department = user_info['department']
-        final_products = load_final_products(department)
-        dept_window = create_department_window(department, processed_products, final_products)
-        handle_department_window(dept_window, processed_products, final_products)
-    
-        sg.popup('Selected products processed successfully', font=FONT_NORMAL)
-
-    else:
-        sg.popup_error('You are not authorized to process products', font=FONT_NORMAL)
-
+    sg.popup('Success', f'{len(selected_products)} products processed successfully', font=FONT_NORMAL)
 
 def handle_department_window(window, processed_products, final_products):
     while True:
@@ -930,32 +941,10 @@ def update_product_fields(window, product):
     window['-SUPPLIER_PRODUCT-'].update(product['Supplier Product Code'])
     window['-DEPARTMENT-'].update(product['Department'])
 
-def update_processed_table(window, inventory):
-    # Filter processed items and format for display
-    # Once processed, these items should never change
-    processed_items = [item for item in inventory if item['Status'] == 'Processed']
-    processed_data = [[
-        item['Product Code'],
-        item['Product Description'],
-        item['Quantity'],
-        item['Unit'],
-        item.get('Processing Date', 'N/A'),
-        item.get('Processed By', 'N/A'),
-        item.get('Temperature Log', [])[-1] if item.get('Temperature Log') else 'N/A',
-        item['Status']
-    ] for item in processed_items]
-    
-    # Get currently displayed data
-    current_data = window['-PROCESSED_TABLE-'].get()
-    
-    # Only update if the data is different
-    # This prevents unnecessary refreshes that might affect processed items
-    if current_data != processed_data:
-        window['-PROCESSED_TABLE-'].update(processed_data)
-
 def update_inventory_table(window, inventory):
-    # Filter active (unprocessed) items
-    active_items = [item for item in inventory if item['Status'] != 'Processed']
+    """Update the inventory table with active (unprocessed) items."""
+    # Filter active (unprocessed) items and store them as a class attribute
+    window.active_items = [item for item in inventory if item['Status'] != 'Processed']
     
     # Format active items for display
     active_data = [[
@@ -967,7 +956,7 @@ def update_inventory_table(window, inventory):
         item['Sell By Date'],
         item.get('Delivery Date', ''),
         item.get('Received By', '')
-    ] for item in active_items]
+    ] for item in window.active_items]  # Use the stored active_items
     
     # Get currently displayed data
     current_data = window['-RECEIVING_TABLE-'].get()
@@ -975,6 +964,29 @@ def update_inventory_table(window, inventory):
     # Only update if there are actual changes in the data
     if current_data != active_data:
         window['-RECEIVING_TABLE-'].update(active_data)
+
+def update_processed_table(window, inventory):
+    """Update the processed items table."""
+    # Store processed items as a class attribute
+    window.processed_items = [item for item in inventory if item['Status'] == 'Processed']
+    
+    processed_data = [[
+        item['Product Code'],
+        item['Product Description'],
+        item['Quantity'],
+        item['Unit'],
+        item.get('Processing Date', 'N/A'),
+        item.get('Processed By', 'N/A'),
+        item.get('Temperature Log', [])[-1] if item.get('Temperature Log') else 'N/A',
+        item['Status']
+    ] for item in window.processed_items]  # Use the stored processed_items
+    
+    # Get currently displayed data
+    current_data = window['-PROCESSED_TABLE-'].get()
+    
+    # Only update if the data is different
+    if current_data != processed_data:
+        window['-PROCESSED_TABLE-'].update(processed_data)
 
 def refresh_display(window, inventory, auth_system):
     """
@@ -1027,7 +1039,7 @@ def show_product_details(product, auth_system):
         [sg.Text(f"Product Description: {product['Product Description']}")],
         [sg.Text(f"Quantity: {product['Quantity']} {product['Unit']}")],
         [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
-        [sg.Text(f"Sell By Date: {product.get('Sell By Date', 'N/A')}")],
+        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
         [sg.Text(f"Delivery Date: {product.get('Delivery Date', 'N/A')}")],  # Changed from Received Date
         [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
         [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
