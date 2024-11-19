@@ -496,22 +496,24 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         generate_and_show_barcode(selected_product)
     
     elif event == 'Refresh':
-        # Get current user's department
+        # Get current user's info to check login status
         current_user = auth_system.get_current_user_info()
         if current_user is None:
-            sg.popup_error('Error: No user is currently logged in.', font=FONT_NORMAL)
+            sg.popup_error('Access Denied', 'Please log in to refresh data.', font=FONT_NORMAL)
             return
-            
-        # Get fresh inventory data from database
-        department_inventory = get_department_inventory(current_user['department'])
         
-        # Update the inventory list
-        inventory.clear()
-        inventory.extend(department_inventory)
-        
-        # Update both tables
-        update_inventory_table(window, inventory)
-        update_processed_table(window, inventory)
+        # Show a confirmation dialog before refreshing
+        if sg.popup_yes_no(
+            'Confirm Refresh', 
+            'This will refresh unprocessed items from the database.\n'
+            'Processed items will not be affected.\n\n'
+            'Do you want to continue?',
+            font=FONT_NORMAL
+        ) == 'Yes':
+            if refresh_display(window, inventory, auth_system):
+                sg.popup('Success', 'Data refreshed successfully.', font=FONT_NORMAL)
+            else:
+                sg.popup_error('Error', 'Failed to refresh data. Please try again.')
 
 def department_login_window(auth_system, inventory, selected_rows, main_window):
     layout = [
@@ -930,31 +932,88 @@ def update_product_fields(window, product):
 
 def update_processed_table(window, inventory):
     # Filter processed items and format for display
+    # Once processed, these items should never change
     processed_items = [item for item in inventory if item['Status'] == 'Processed']
-    window['-PROCESSED_TABLE-'].update([[
+    processed_data = [[
         item['Product Code'],
         item['Product Description'],
         item['Quantity'],
         item['Unit'],
         item.get('Processing Date', 'N/A'),
         item.get('Processed By', 'N/A'),
-        item.get('Temperature Log', [])[-1] if item.get('Temperature Log') else 'N/A',  # Latest temperature
+        item.get('Temperature Log', [])[-1] if item.get('Temperature Log') else 'N/A',
         item['Status']
-    ] for item in processed_items])
+    ] for item in processed_items]
+    
+    # Get currently displayed data
+    current_data = window['-PROCESSED_TABLE-'].get()
+    
+    # Only update if the data is different
+    # This prevents unnecessary refreshes that might affect processed items
+    if current_data != processed_data:
+        window['-PROCESSED_TABLE-'].update(processed_data)
 
 def update_inventory_table(window, inventory):
     # Filter active (unprocessed) items
     active_items = [item for item in inventory if item['Status'] != 'Processed']
-    window['-RECEIVING_TABLE-'].update([[
+    
+    # Format active items for display
+    active_data = [[
         item['Product Code'],
         item['Product Description'],
         item['Quantity'],
         item['Unit'],
         item['Supplier Batch No'],
         item['Sell By Date'],
-        item.get('Delivery Date', ''),  # Changed from 'Received Date' to 'Delivery Date'
+        item.get('Delivery Date', ''),
         item.get('Received By', '')
-    ] for item in active_items])
+    ] for item in active_items]
+    
+    # Get currently displayed data
+    current_data = window['-RECEIVING_TABLE-'].get()
+    
+    # Only update if there are actual changes in the data
+    if current_data != active_data:
+        window['-RECEIVING_TABLE-'].update(active_data)
+
+def refresh_display(window, inventory, auth_system):
+    """
+    Safely refresh the display without modifying processed product data.
+    Only updates the visual representation of data that hasn't been processed.
+    
+    Args:
+        window: The PySimpleGUI window object
+        inventory: The current inventory data
+        auth_system: The authentication system for access control
+    """
+    # Get current user's department
+    current_user = auth_system.get_current_user_info()
+    if current_user is None:
+        return False
+        
+    try:
+        # Get fresh inventory data for unprocessed items from the department
+        department_inventory = get_department_inventory(current_user['department'])
+        
+        # Separate processed and unprocessed items in current inventory
+        processed_items = [item for item in inventory if item['Status'] == 'Processed']
+        
+        # Clear and update inventory with processed items and fresh unprocessed items
+        inventory.clear()
+        inventory.extend(processed_items)  # Keep processed items unchanged
+        inventory.extend(department_inventory)  # Add fresh unprocessed items
+        
+        # Update the display tables
+        update_processed_table(window, inventory)
+        update_inventory_table(window, inventory)
+        
+        return True
+        
+    except Exception as e:
+        sg.popup_error('Database Error', f'Error refreshing data: {str(e)}')
+        return False
+    
+    return True
 
 def show_product_details(product, auth_system):
     # Get the current manager info
@@ -978,11 +1037,9 @@ def show_product_details(product, auth_system):
         [sg.Text(f"Delivery Approved By: {product.get('Delivery Approved By', 'N/A')}")],
         [sg.Text(f"Delivery Approval Date: {product.get('Delivery Approval Date', 'N/A')}")],
         [sg.Text('Handling History:')],
-        [sg.Multiline(product.get('Handling History', 'No handling history available'),
-                     size=(60, 5), disabled=True)],
+        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
         [sg.Text('Temperature Log:')],
-        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])),
-                     size=(60, 3), disabled=True)],
+        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
         [sg.Button('Close')]
     ]
     
@@ -1378,8 +1435,7 @@ def create_database_management_tab():
             [sg.Text('Date Range:')],
             [sg.Text('From:'), 
              sg.Input(key='-DB-START-DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), enable_events=True),
-             sg.CalendarButton('Choose', target='-DB-START-DATE-', format='%Y-%m-%d', 
-                             button_color=(COLORS['text'], COLORS['primary']), key='-DB-START-CAL-'),
+             sg.CalendarButton('Choose', target='-DB-START-DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']), key='-DB-START-CAL-'),
              sg.Text('To:'), 
              sg.Input(key='-DB-END-DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), enable_events=True),
              sg.CalendarButton('Choose', target='-DB-END-DATE-', format='%Y-%m-%d',
