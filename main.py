@@ -281,8 +281,7 @@ def create_receiving_tab():
                      justification='left',
                      num_rows=15,
                      key='-RECEIVING_TABLE-',
-                     enable_events=True,
-                     select_mode=sg.TABLE_SELECT_MODE_EXTENDED)],
+                     enable_events=True)],
             [sg.Button('View Details', button_color=(COLORS['text'], COLORS['primary'])),
              sg.Button('Process Selected', button_color=(COLORS['text'], COLORS['primary'])),
              sg.Button('Generate Barcode', button_color=(COLORS['text'], COLORS['primary'])),
@@ -1503,13 +1502,15 @@ def create_database_management_tab():
                              button_color=(COLORS['text'], COLORS['primary']), key='-DB-END-CAL-')],
             [sg.Text('Department:'), 
              sg.Combo(['All', 'Butchery', 'Bakery', 'HMR'], default_value='All', key='-DB-DEPT-', size=(20,1))],
+            [sg.Text('Status:'),
+             sg.Combo(['All', 'Active', 'Processed'], default_value='All', key='-DB-STATUS-', size=(20,1))],
             [sg.Text('Product Code:'), sg.Input(key='-DB-PRODUCT-CODE-', size=(20,1))],
             [sg.Button('Search', key='-DB-SEARCH-', button_color=(COLORS['text'], COLORS['primary']))]
         ])],
         [sg.Frame('Results', [
             [sg.Table(
                 values=[], 
-                headings=['Date', 'Product', 'Department', 'Quantity', 'Status', 'Batch', 'Description'],
+                headings=['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'],
                 auto_size_columns=True,
                 justification='left',
                 num_rows=10,
@@ -1537,7 +1538,17 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
             cursor = conn.cursor()
             
             query = '''
-                SELECT received_date, product_code, department, quantity, status, supplier_batch, description
+                SELECT 
+                    received_date, 
+                    product_code, 
+                    department, 
+                    quantity, 
+                    status, 
+                    supplier_batch, 
+                    description,
+                    processed_by,
+                    processing_date,
+                    handling_history
                 FROM received_products
                 WHERE 1=1
             '''
@@ -1552,13 +1563,23 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
             if values['-DB-DEPT-'] != 'All':
                 query += ' AND department = ?'
                 params.append(values['-DB-DEPT-'])
+            if values['-DB-STATUS-'] != 'All':
+                query += ' AND status = ?'
+                params.append(values['-DB-STATUS-'].lower())
             if values['-DB-PRODUCT-CODE-']:
                 query += ' AND product_code LIKE ?'
                 params.append(f"%{values['-DB-PRODUCT-CODE-']}%")
                 
             cursor.execute(query, params)
             results = cursor.fetchall()
-            window['-DB-TABLE-'].update(results)
+            
+            # Format results for display
+            formatted_results = []
+            for row in results:
+                formatted_row = list(row[:9])  # Get all columns except handling_history
+                formatted_results.append(formatted_row)
+                
+            window['-DB-TABLE-'].update(formatted_results)
             conn.close()
         except Exception as e:
             sg.popup_error('Database Error', f'Error searching database: {str(e)}')
@@ -1572,7 +1593,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
             try:
                 with open(filename, 'w', newline='') as f:
                     writer = csv.writer(f)
-                    writer.writerow(['Date', 'Product', 'Department', 'Quantity', 'Status', 'Batch', 'Description'])
+                    writer.writerow(['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'])
                     writer.writerows(window['-DB-TABLE-'].get())
                 sg.popup('Success', f'Report saved as {filename}')
             except Exception as e:
@@ -1587,11 +1608,11 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
             try:
                 pdf = FPDF()
                 pdf.add_page()
-                pdf.set_font("Arial", size=12)
+                pdf.set_font("Arial", size=10)  # Reduced font size to fit more columns
                 
                 # Add table headers
-                headers = ['Date', 'Product', 'Department', 'Quantity', 'Status', 'Batch', 'Description']
-                col_width = 25
+                headers = ['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date']
+                col_width = pdf.w / len(headers) - 2  # Distribute width evenly
                 for header in headers:
                     pdf.cell(col_width, 10, txt=header, border=1)
                 pdf.ln()
@@ -1599,7 +1620,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                 # Add data rows
                 for row in window['-DB-TABLE-'].get():
                     for item in row:
-                        pdf.cell(col_width, 10, txt=str(item)[:20], border=1)
+                        pdf.cell(col_width, 10, txt=str(item)[:15], border=1)  # Truncate long text
                     pdf.ln()
                 
                 pdf.output(filename)
@@ -1614,57 +1635,75 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                 sg.popup_error('No Selection', 'Please select a record to view details.')
                 return
             
-            table_data = window['-DB-TABLE-'].Values  # Get all table data
+            table_data = window['-DB-TABLE-'].Values
             if not table_data:
                 sg.popup_error('No Data', 'No data available to view.')
                 return
                 
-            selected_row = table_data[selected_rows[0]]  # Get the selected row data
+            selected_row = table_data[selected_rows[0]]
             if not selected_row:
                 sg.popup_error('Invalid Selection', 'Could not retrieve selected record.')
                 return
                 
-            # Create a dictionary with the product details
-            product_details = {
-                'received_date': selected_row[0],
-                'product_code': selected_row[1],
-                'department': selected_row[2],
-                'quantity': selected_row[3],
-                'status': selected_row[4],
-                'supplier_batch': selected_row[5],
-                'description': selected_row[6] if len(selected_row) > 6 else 'N/A'
-            }
+            # Get full product details including handling history
+            conn = sqlite3.connect('spatrac.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT *
+                FROM received_products
+                WHERE product_code = ? AND supplier_batch = ?
+            ''', (selected_row[1], selected_row[5]))
             
-            show_database_product_details(product_details, auth_system)
+            result = cursor.fetchone()
+            if result:
+                column_names = [description[0] for description in cursor.description]
+                product_details = dict(zip(column_names, result))
+                
+                # Convert handling history string back to list if it exists
+                if product_details.get('handling_history'):
+                    product_details['handling_history'] = product_details['handling_history'].split('\n')
+                
+                show_database_product_details(product_details, auth_system)
+            else:
+                sg.popup_error('Record Not Found', 'Could not find the selected record in the database.')
+            
+            conn.close()
         except Exception as e:
             sg.popup_error('Error', f'An error occurred while viewing details: {str(e)}')
 
 def show_database_product_details(product, auth_system):
-    """Display product details from database records."""
-    user_info = auth_system.get_current_user_info()
-    manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
+    # Format dates for display
+    received_date = product.get('received_date', 'N/A')
+    processing_date = product.get('processing_date', 'N/A')
+    
+    # Format handling history for display
+    handling_history = product.get('handling_history', [])
+    if isinstance(handling_history, str):
+        handling_history = handling_history.split('\n')
+    history_text = '\n'.join(handling_history) if handling_history else 'No handling history'
     
     layout = [
-        [sg.Text("Product Details", font=FONT_SUBHEADER, justification='center')],
-        [sg.Text("─" * 50)],
-        [sg.Text(f"Product Code: {product['product_code']}")],
-        [sg.Text(f"Department: {product['department']}")],
-        [sg.Text(f"Quantity: {product['quantity']}")],
-        [sg.Text(f"Status: {product['status']}")],
-        [sg.Text(f"Supplier Batch: {product['supplier_batch']}")],
-        [sg.Text(f"Received Date: {product['received_date']}")],
-        [sg.Text("─" * 50)],
-        [sg.Text(manager_info, font=FONT_SMALL)],
-        [sg.Button('Close', button_color=(COLORS['text'], COLORS['secondary']), bind_return_key=True)]
+        [sg.Text('Product Details', font=FONT_HEADER)],
+        [sg.Text(f"Product Code: {product.get('product_code', 'N/A')}")],
+        [sg.Text(f"Description: {product.get('description', 'N/A')}")],
+        [sg.Text(f"Current Department: {product.get('department', 'N/A')}")],
+        [sg.Text(f"Quantity: {product.get('quantity', 'N/A')} {product.get('unit', '')}")],
+        [sg.Text(f"Status: {product.get('status', 'N/A')}")],
+        [sg.Text(f"Supplier Batch: {product.get('supplier_batch', 'N/A')}")],
+        [sg.Text(f"Received Date: {received_date}")],
+        [sg.Text(f"Received By: {product.get('received_by', 'N/A')}")],
+        [sg.Text(f"Processing Date: {processing_date}")],
+        [sg.Text(f"Processed By: {product.get('processed_by', 'N/A')}")],
+        [sg.Text('Handling History:', font=FONT_NORMAL)],
+        [sg.Multiline(history_text, size=(60, 5), disabled=True)],
+        [sg.Button('Close', button_color=(COLORS['text'], COLORS['secondary']))]
     ]
     
-    window = sg.Window('Product Details', layout, modal=True, finalize=True, element_justification='center')
-    
+    window = sg.Window('Product Details', layout, modal=True)
     while True:
         event, values = window.read()
         if event in (sg.WIN_CLOSED, 'Close'):
             break
-    
     window.close()
 
 def load_final_products(department):
