@@ -840,15 +840,29 @@ def handle_reports_events(event, values, window, inventory, auth_system):
             end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
             report_type = values['-REPORT_TYPE-']
             
-            report_text = generate_report(inventory, report_type, start_date, end_date, auth_system)
-            window['-REPORT_PREVIEW-'].update(report_text)
+            # Get raw report data
+            report_data = generate_report(inventory, report_type, start_date, end_date, auth_system)
+            
+            # Format report for display
+            formatted_report = format_report_for_display(report_data, report_type, auth_system)
+            window['-REPORT_PREVIEW-'].update(formatted_report)
+            
+            # Store raw data for saving
+            window.user_data = {
+                'current_report': {
+                    'data': report_data,
+                    'type': report_type,
+                    'start_date': start_date,
+                    'end_date': end_date
+                }
+            }
             
         except ValueError as e:
             sg.popup_error(f'Error generating report: {str(e)}', title='Report Generation Error')
             
     elif event == '-SAVE_PDF-':
         try:
-            if not window['-REPORT_PREVIEW-'].get():
+            if not hasattr(window, 'user_data') or 'current_report' not in window.user_data:
                 sg.popup_error('Please generate a report first.', title='Export Error')
                 return
                 
@@ -856,11 +870,10 @@ def handle_reports_events(event, values, window, inventory, auth_system):
                                        file_types=(("PDF Files", "*.pdf"),),
                                        default_extension='.pdf')
             if filename:
-                report_type = values['-REPORT_TYPE-']
-                start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
-                end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
-                
-                save_report_as_pdf(filename, inventory, report_type, start_date, end_date, auth_system)
+                report_info = window.user_data['current_report']
+                save_report_as_pdf(filename, report_info['data'], report_info['type'],
+                                 report_info['start_date'], report_info['end_date'],
+                                 auth_system)
                 sg.popup('Report saved successfully!', title='Success')
                 
         except Exception as e:
@@ -868,7 +881,7 @@ def handle_reports_events(event, values, window, inventory, auth_system):
             
     elif event == '-SAVE_CSV-':
         try:
-            if not window['-REPORT_PREVIEW-'].get():
+            if not hasattr(window, 'user_data') or 'current_report' not in window.user_data:
                 sg.popup_error('Please generate a report first.', title='Export Error')
                 return
                 
@@ -876,11 +889,10 @@ def handle_reports_events(event, values, window, inventory, auth_system):
                                        file_types=(("CSV Files", "*.csv"),),
                                        default_extension='.csv')
             if filename:
-                report_type = values['-REPORT_TYPE-']
-                start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
-                end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
-                
-                save_report_as_csv(filename, inventory, report_type, start_date, end_date, auth_system)
+                report_info = window.user_data['current_report']
+                save_report_as_csv(filename, report_info['data'], report_info['type'],
+                                 report_info['start_date'], report_info['end_date'],
+                                 auth_system)
                 sg.popup('Report saved successfully!', title='Success')
                 
         except Exception as e:
@@ -1032,8 +1044,9 @@ def generate_traceability_report(inventory, start_date, end_date, auth_system):
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT product_code, description, supplier_batch, sell_by_date, 
-                   received_date, received_by, status
+            SELECT product_code, description, quantity, unit, supplier_batch, 
+                   sell_by_date, received_date, received_by, status, department,
+                   handling_history, temperature_log, processed_by, processing_date
             FROM received_products
             WHERE department = ? 
             AND received_date BETWEEN ? AND ?
@@ -1052,18 +1065,28 @@ def generate_traceability_report(inventory, start_date, end_date, auth_system):
         
         report = []
         for item in trace_data:
+            # Generate barcode data for the item
+            barcode_data = f"{item[0]}|{item[4]}|{item[5]}"  # product_code|batch|sell_by
+            
             report.append({
                 'Product Code': item[0],
                 'Description': item[1],
-                'Supplier Batch': item[2],
-                'Sell By Date': item[3],
-                'Received Date': item[4],
-                'Received By': item[5],
-                'Status': item[6],
-                'Department': department
+                'Quantity': item[2],
+                'Unit': item[3],
+                'Supplier Batch': item[4],
+                'Sell By Date': item[5],
+                'Received Date': item[6],
+                'Received By': item[7],
+                'Status': item[8],
+                'Department': item[9],
+                'Handling History': item[10].split('\n') if item[10] else [],
+                'Temperature Log': item[11].split('\n') if item[11] else [],
+                'Processed By': item[12],
+                'Processing Date': item[13],
+                'Barcode Data': barcode_data
             })
         
-        return generate_report_display(report, 'Traceability Report')
+        return report
         
     except Exception as e:
         raise Exception(f"Error generating traceability report: {str(e)}")
