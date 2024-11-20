@@ -1708,7 +1708,7 @@ def create_reports_tab():
     ]
     return layout
 
-def save_report_as_pdf(filename, report_data, report_type, auth_system):
+def save_report_as_pdf(filename, report_data, report_type, start_date, end_date, auth_system):
     """Save the report as a PDF file."""
     try:
         pdf = FPDF()
@@ -1797,7 +1797,7 @@ def save_report_as_pdf(filename, report_data, report_type, auth_system):
     except Exception as e:
         raise Exception(f"Error creating PDF: {str(e)}")
 
-def save_report_as_csv(filename, report_data, report_type, auth_system):
+def save_report_as_csv(filename, report_data, report_type, start_date, end_date, auth_system):
     try:
         user_info = auth_system.get_current_user_info()
         
