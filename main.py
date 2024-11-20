@@ -832,62 +832,59 @@ def update_recipes_table(window):
             table_data.append([r['code'], r['name'], r['department'], len(r['ingredients'])])
     window['-RECIPES_TABLE-'].update(table_data)
 
-def handle_reports_events(event, values, window, inventory, auth_system):  # Added auth_system parameter
-    try:
-        if event == '-GENERATE_REPORT-':
+def handle_reports_events(event, values, window, inventory, auth_system):
+    """Handle events in the Reports tab."""
+    if event == '-GENERATE_REPORT-':
+        try:
+            start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
+            end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
             report_type = values['-REPORT_TYPE-']
-            start_date = values['-START_DATE-']
-            end_date = values['-END_DATE-']
             
-            if not all([report_type, start_date, end_date]):
-                sg.popup_error('Please select report type and date range', font=FONT_NORMAL)
+            report_text = generate_report(inventory, report_type, start_date, end_date, auth_system)
+            window['-REPORT_PREVIEW-'].update(report_text)
+            
+        except ValueError as e:
+            sg.popup_error(f'Error generating report: {str(e)}', title='Report Generation Error')
+            
+    elif event == '-SAVE_PDF-':
+        try:
+            if not window['-REPORT_PREVIEW-'].get():
+                sg.popup_error('Please generate a report first.', title='Export Error')
                 return
                 
-            try:
-                # Validate dates
-                datetime.strptime(start_date, '%Y-%m-%d')
-                datetime.strptime(end_date, '%Y-%m-%d')
-            except ValueError:
-                sg.popup_error('Invalid date format. Please use YYYY-MM-DD', font=FONT_NORMAL)
-                return
-                
-            try:
-                report = generate_report(inventory, report_type, start_date, end_date, auth_system)
-                formatted_report = format_report_for_display(report, report_type, auth_system)
-                window['-REPORT_PREVIEW-'].update(formatted_report)
-            except Exception as e:
-                sg.popup_error(f'Error generating report: {str(e)}', font=FONT_NORMAL)
-
-        elif event == '-SAVE_PDF-':
-            report = values['-REPORT_PREVIEW-']
-            if not report:
-                sg.popup_error('Please generate a report first', font=FONT_NORMAL)
-                return
-                
-            filename = sg.popup_get_file('Save PDF as', save_as=True, file_types=(("PDF Files", "*.pdf"),))
+            filename = sg.popup_get_file('Save PDF as:', save_as=True, 
+                                       file_types=(("PDF Files", "*.pdf"),),
+                                       default_extension='.pdf')
             if filename:
-                try:
-                    save_as_pdf(report, filename)
-                    sg.popup(f"Report saved as {filename}")
-                except Exception as e:
-                    sg.popup_error(f'Error saving PDF: {str(e)}', font=FONT_NORMAL)
-
-        elif event == '-SAVE_CSV-':
-            report = values['-REPORT_PREVIEW-']
-            if not report:
-                sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                report_type = values['-REPORT_TYPE-']
+                start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
+                end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
+                
+                save_report_as_pdf(filename, inventory, report_type, start_date, end_date, auth_system)
+                sg.popup('Report saved successfully!', title='Success')
+                
+        except Exception as e:
+            sg.popup_error(f'Error saving PDF: {str(e)}', title='PDF Export Error')
+            
+    elif event == '-SAVE_CSV-':
+        try:
+            if not window['-REPORT_PREVIEW-'].get():
+                sg.popup_error('Please generate a report first.', title='Export Error')
                 return
                 
-            filename = sg.popup_get_file('Save CSV as', save_as=True, file_types=(("CSV Files", "*.csv"),))
+            filename = sg.popup_get_file('Save CSV as:', save_as=True, 
+                                       file_types=(("CSV Files", "*.csv"),),
+                                       default_extension='.csv')
             if filename:
-                try:
-                    save_as_csv(report, filename)
-                    sg.popup(f"Report saved as {filename}")
-                except Exception as e:
-                    sg.popup_error(f'Error saving CSV: {str(e)}', font=FONT_NORMAL)
-                    
-    except Exception as e:
-        sg.popup_error(f'An unexpected error occurred: {str(e)}', font=FONT_NORMAL)
+                report_type = values['-REPORT_TYPE-']
+                start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
+                end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
+                
+                save_report_as_csv(filename, inventory, report_type, start_date, end_date, auth_system)
+                sg.popup('Report saved successfully!', title='Success')
+                
+        except Exception as e:
+            sg.popup_error(f'Error saving CSV: {str(e)}', title='CSV Export Error')
 
 def format_report_for_display(report_data, report_type, auth_system):
     user_info = auth_system.get_current_user_info()
@@ -956,17 +953,6 @@ Tracking Information:
 • Received By: {item['Received By']}
 ─────────────────────────────────────────────────────────────────"""
             
-    elif report_type == 'Temperature Log':
-        body = "Temperature Log Entries:\n"
-        body += "─────────────────────────────────────────────────────────────────\n\n"
-        
-        for log in report_data:
-            body += f"""
-Date: {log['Date']}
-Temperature: {log['Temperature']}
-Recorded By: {log['Recorded By']}
-─────────────────────────────────────────────────────────────────"""
-    
     footer = f"""
 
 Report End
@@ -1107,14 +1093,12 @@ def generate_report(inventory, report_type, start_date, end_date, auth_system):
         if not auth_system or not auth_system.get_current_user_info():
             raise ValueError("User not authenticated")
             
-        if report_type == 'Traceability':
-            return generate_traceability_report(inventory, start_date, end_date, auth_system)
-        elif report_type == 'Inventory Summary':
+        if report_type == 'Inventory Summary':
             return generate_inventory_summary(inventory, start_date, end_date, auth_system)
-        elif report_type == 'Temperature Log':
-            return generate_temperature_log(inventory, start_date, end_date, auth_system)
+        elif report_type == 'Traceability Report':
+            return generate_traceability_report(inventory, start_date, end_date, auth_system)
         else:
-            raise ValueError(f"Invalid report type: {report_type}")
+            raise ValueError(f"Unknown report type: {report_type}")
     except Exception as e:
         raise Exception(f"Error generating report: {str(e)}")
 
@@ -1214,49 +1198,6 @@ def generate_traceability_report(inventory, start_date, end_date, auth_system):
         return report
     except Exception as e:
         raise Exception(f"Error generating traceability report: {str(e)}")
-
-def generate_temperature_log(inventory, start_date, end_date, auth_system):
-    try:
-        current_user = auth_system.get_current_user_info()
-        if not current_user:
-            raise ValueError("User information not available")
-            
-        department = current_user['department']
-        
-        conn = sqlite3.connect('spatrac.db')
-        cursor = conn.cursor()
-        
-        # Assuming we have a temperature_logs table
-        cursor.execute('''
-            SELECT recorded_date, temperature, recorded_by
-            FROM temperature_logs
-            WHERE department = ? 
-            AND recorded_date BETWEEN ? AND ?
-            ORDER BY recorded_date DESC
-        ''', (department, start_date, end_date))
-        
-        temp_data = cursor.fetchall()
-        conn.close()
-        
-        if not temp_data:
-            return [{
-                'Message': 'No temperature logs found for the selected period',
-                'Department': department,
-                'Date Range': f'{start_date} to {end_date}'
-            }]
-        
-        report = []
-        for item in temp_data:
-            report.append({
-                'Date': item[0],
-                'Department': department,
-                'Temperature': f"{item[1]}°C",
-                'Recorded By': item[2]
-            })
-        
-        return report
-    except Exception as e:
-        raise Exception(f"Error generating temperature log: {str(e)}")
 
 def show_login_window(auth_system):
     layout = [
@@ -1698,7 +1639,7 @@ def show_database_product_details(product, auth_system):
         [sg.Text(f"Processed By: {product.get('processed_by', 'N/A')}")],
         [sg.Text('Handling History:', font=FONT_NORMAL)],
         [sg.Multiline(history_text, size=(60, 5), disabled=True)],
-        [sg.Button('Close', button_color=(COLORS['text'], COLORS['secondary']))]
+        [sg.Button('Close')]
     ]
     
     window = sg.Window('Product Details', layout, modal=True)
@@ -1720,30 +1661,141 @@ def load_final_products(department):
 def create_reports_tab():
     today = datetime.now()
     layout = [
-        [sg.Frame('Generate Reports', [
+        [sg.Text('Reports', font=FONT_HEADER, justification='center', expand_x=True)],
+        [sg.Frame('Report Options', [
             [sg.Text('Report Type:'),
-             sg.Combo(['Inventory Summary', 'Traceability', 'Temperature Log'],
-                     default_value='Inventory Summary',
-                     key='-REPORT_TYPE-', size=(20, 1))],
+             sg.Combo(['Inventory Summary', 'Traceability Report'], 
+                     default_value='Inventory Summary', key='-REPORT_TYPE-', size=(20,1))],
             [sg.Text('Date Range:')],
-            [sg.Text('Start Date:'),
-             sg.Input(key='-START_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Select', target='-START_DATE-', format='%Y-%m-%d',
-                             button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Text('End Date:'),
-             sg.Input(key='-END_DATE-', size=(20, 1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Select', target='-END_DATE-', format='%Y-%m-%d',
-                             button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary'])),
-             sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
-             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']))]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True)],
+            [sg.Text('From:'), 
+             sg.Input(key='-START_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d')),
+             sg.CalendarButton('Choose', target='-START_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Text('To:'), 
+             sg.Input(key='-END_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d')),
+             sg.CalendarButton('Choose', target='-END_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary']))]
+        ])],
         [sg.Frame('Report Preview', [
-            [sg.Multiline(size=(80, 30), key='-REPORT_PREVIEW-', font=('Courier', 10),
-                         background_color='white', text_color='black', expand_x=True, expand_y=True)]
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)]
+            [sg.Multiline(size=(80, 20), key='-REPORT_PREVIEW-', disabled=True)]
+        ])],
+        [sg.Frame('Export Options', [
+            [sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
+             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']))]
+        ])]
     ]
     return layout
+
+def save_report_as_pdf(filename, inventory, report_type, start_date, end_date, auth_system):
+    """Save the report as a PDF file."""
+    try:
+        # Generate the report data
+        report_data = generate_report(inventory, report_type, start_date, end_date, auth_system)
+        
+        # Create PDF
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Set font
+        pdf.set_font("Arial", "B", 16)
+        
+        # Title
+        pdf.cell(0, 10, f"SPATRAC {report_type}", ln=True, align='C')
+        pdf.ln(10)
+        
+        # Date Range
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(0, 10, f"Date Range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}", ln=True)
+        pdf.ln(5)
+        
+        # Report Content
+        pdf.set_font("Arial", "", 10)
+        if report_type == 'Inventory Summary':
+            for item in report_data:
+                pdf.cell(0, 10, f"Product Code: {item.get('Product Code', 'N/A')}", ln=True)
+                pdf.cell(0, 10, f"Name: {item.get('Name', 'N/A')}", ln=True)
+                pdf.cell(0, 10, f"Quantity: {item.get('Quantity', 'N/A')}", ln=True)
+                pdf.cell(0, 10, f"Status: {item.get('Status', 'N/A')}", ln=True)
+                pdf.ln(5)
+        elif report_type == 'Traceability Report':
+            for item in report_data:
+                pdf.cell(0, 10, f"Product: {item.get('Product', 'N/A')}", ln=True)
+                pdf.cell(0, 10, f"Received Date: {item.get('Received Date', 'N/A')}", ln=True)
+                pdf.cell(0, 10, f"Received By: {item.get('Received By', 'N/A')}", ln=True)
+                pdf.cell(0, 10, f"Status: {item.get('Status', 'N/A')}", ln=True)
+                pdf.ln(5)
+        
+        # Save the PDF
+        pdf.output(filename)
+        
+    except Exception as e:
+        raise Exception(f"Error creating PDF: {str(e)}")
+
+def save_report_as_csv(filename, inventory, report_type, start_date, end_date, auth_system):
+    """Save the report as a CSV file."""
+    try:
+        # Generate the report data
+        report_data = generate_report(inventory, report_type, start_date, end_date, auth_system)
+        
+        # Define headers based on report type
+        if report_type == 'Inventory Summary':
+            headers = ['Product Code', 'Name', 'Quantity', 'Status']
+        elif report_type == 'Traceability Report':
+            headers = ['Product', 'Received Date', 'Received By', 'Status']
+        else:
+            raise ValueError(f"Unknown report type: {report_type}")
+        
+        # Write to CSV
+        with open(filename, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(report_data)
+            
+    except Exception as e:
+        raise Exception(f"Error creating CSV: {str(e)}")
+
+def format_report_for_display(report_data, report_type, auth_system):
+    """Format the report data for display in the GUI."""
+    user_info = auth_system.get_current_user_info()
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    header = f"""
+SPATRAC {report_type}
+─────────────────────────────────────────────────────────────────
+Generated by: {user_info['username']}
+Department: {user_info['department']}
+Date: {current_time}
+─────────────────────────────────────────────────────────────────
+
+"""
+    
+    if report_type == 'Inventory Summary':
+        body = ""
+        for item in report_data:
+            body += f"""
+Product Code: {item.get('Product Code', 'N/A')}
+Name: {item.get('Name', 'N/A')}
+Quantity: {item.get('Quantity', 'N/A')}
+Status: {item.get('Status', 'N/A')}
+─────────────────────────────────────────────────────────────────"""
+    
+    elif report_type == 'Traceability Report':
+        body = ""
+        for item in report_data:
+            body += f"""
+Product: {item.get('Product', 'N/A')}
+Received Date: {item.get('Received Date', 'N/A')}
+Received By: {item.get('Received By', 'N/A')}
+Status: {item.get('Status', 'N/A')}
+─────────────────────────────────────────────────────────────────"""
+    
+    footer = f"""
+
+Report End
+Generated by SPATRAC System
+{current_time}
+"""
+    
+    return header + body + footer
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
