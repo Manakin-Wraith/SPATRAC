@@ -4,12 +4,15 @@ import csv
 from fpdf import FPDF
 from datetime import datetime
 import barcode
+from barcode import Code128
 from barcode.writer import ImageWriter
 import io
 from PIL import Image
 from auth_system import AuthSystem
 import json
 import sqlite3
+import base64
+import os
 
 # Constants
 FONT_HEADER = ('Helvetica', 24)
@@ -162,6 +165,135 @@ def generate_barcode(data):
     image = Image.open(rv)
     image.thumbnail((300, 300))
     return image
+
+def generate_product_barcode(product_code, batch_no, sell_by_date):
+    """Generate a barcode for a product using Code128 format."""
+    try:
+        # Create a unique identifier combining product info
+        barcode_data = f"{product_code}|{batch_no}|{sell_by_date}"
+        
+        # Create barcodes directory if it doesn't exist
+        barcode_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'barcodes')
+        os.makedirs(barcode_dir, exist_ok=True)
+        
+        # Generate the barcode
+        code128 = Code128(barcode_data, writer=ImageWriter())
+        
+        # Save barcode to file
+        barcode_path = os.path.join(barcode_dir, f"{product_code}_{batch_no}.png")
+        code128.save(barcode_path)
+        
+        return {
+            'barcode_data': barcode_data,
+            'barcode_path': barcode_path
+        }
+    except Exception as e:
+        print(f"Error generating barcode: {str(e)}")
+        return None
+
+def add_product_to_inventory(values, auth_system):
+    """Add a new product to the inventory database."""
+    try:
+        current_user = auth_system.get_current_user_info()
+        if not current_user:
+            return False, "User not authenticated"
+
+        # Generate barcode
+        barcode_info = generate_product_barcode(
+            values['-PRODUCT_CODE-'],
+            values['-SUPPLIER_BATCH-'],
+            values['-SELL_BY_DATE-']
+        )
+        
+        if not barcode_info:
+            return False, "Failed to generate barcode"
+
+        # Store barcode data in handling_history
+        handling_history = f"Barcode Generated: {barcode_info['barcode_data']}\nBarcode Path: {barcode_info['barcode_path']}"
+
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO received_products (
+                product_code, description, quantity, unit, 
+                supplier_batch, sell_by_date, received_date,
+                received_by, status, department, handling_history
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            values['-PRODUCT_CODE-'],
+            values['-DESCRIPTION-'],
+            values['-QUANTITY-'],
+            values['-UNIT-'],
+            values['-SUPPLIER_BATCH-'],
+            values['-SELL_BY_DATE-'],
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            current_user['username'],
+            'active',
+            current_user['department'],
+            handling_history
+        ))
+        
+        conn.commit()
+        conn.close()
+        return True, "Product added successfully with barcode"
+        
+    except sqlite3.Error as e:
+        return False, f"Database error: {str(e)}"
+    except Exception as e:
+        return False, f"Error adding product: {str(e)}"
+
+def show_product_details(product, auth_system):
+    """Display detailed product information including barcode."""
+    user_info = auth_system.get_current_user_info()
+    manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
+    
+    # Extract barcode information from handling_history
+    barcode_path = None
+    barcode_data = None
+    if 'Handling History' in product:
+        history_lines = product['Handling History'].split('\n')
+        for line in history_lines:
+            if line.startswith('Barcode Generated:'):
+                barcode_data = line.replace('Barcode Generated:', '').strip()
+            elif line.startswith('Barcode Path:'):
+                barcode_path = line.replace('Barcode Path:', '').strip()
+    
+    layout = [
+        [sg.Text('Product Details', font=FONT_HEADER)],
+        [sg.Text(manager_info, font=FONT_SMALL)],
+        [sg.Text(f"Product Code: {product['Product Code']}")],
+        [sg.Text(f"Product Description: {product['Product Description']}")],
+        [sg.Text(f"Quantity: {product['Quantity']} {product['Unit']}")],
+        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
+        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
+        [sg.Text(f"Received Date: {product.get('Received Date', 'N/A')}")],
+        [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
+        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
+    ]
+    
+    if barcode_data:
+        layout.append([sg.Text(f"Barcode Data: {barcode_data}")])
+    
+    if barcode_path and os.path.exists(barcode_path):
+        layout.append([sg.Image(barcode_path)])
+    
+    layout.extend([
+        [sg.Text('Handling History:')],
+        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
+        [sg.Text('Temperature Log:')],
+        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
+        [sg.Button('Close')]
+    ])
+    
+    details_window = sg.Window('Product Details', layout, modal=True)
+    
+    while True:
+        event, _ = details_window.read()
+        if event in (sg.WIN_CLOSED, 'Close'):
+            break
+    
+    details_window.close()
 
 # New function for search suggestions
 def get_search_suggestions(df, search_term):
@@ -410,6 +542,11 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
             if temp_log:
                 product['Temperature Log'].append(temp_log)
             
+            barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
+            if barcode_info:
+                product['barcode_data'] = barcode_info['barcode_data']
+                product['barcode_path'] = barcode_info['barcode_path']
+            
             inventory.append(product)
             update_inventory_table(window, inventory)
             update_department_tables(window, inventory)
@@ -522,8 +659,8 @@ def department_login_window(auth_system, inventory, selected_rows, main_window):
         [sg.Text('Department Manager Login', font=FONT_SUBHEADER)],
         [sg.Text('Username:', size=(15, 1)), sg.Input(key='-USERNAME-')],
         [sg.Text('Password:', size=(15, 1)), sg.Input(key='-PASSWORD-', password_char='*')],
-        [sg.Button('Login', button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Cancel', button_color=(COLORS['text'], COLORS['secondary']))]
+        [sg.Button('Login', size=(10, 1), button_color=(COLORS['text'], COLORS['primary'])),
+         sg.Button('Cancel', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']))]
     ]
     window = sg.Window('Department Manager Login', layout)
 
@@ -1145,7 +1282,9 @@ def initialize_database():
             handling_history TEXT DEFAULT '',
             temperature_log TEXT DEFAULT '',
             processed_by TEXT,
-            processing_date TEXT
+            processing_date TEXT,
+            barcode_data TEXT,
+            barcode_image TEXT
         )
     ''')
     
@@ -1157,7 +1296,9 @@ def initialize_database():
         'handling_history': 'TEXT DEFAULT ""',
         'temperature_log': 'TEXT DEFAULT ""',
         'processed_by': 'TEXT',
-        'processing_date': 'TEXT'
+        'processing_date': 'TEXT',
+        'barcode_data': 'TEXT',
+        'barcode_image': 'TEXT'
     }
     
     for col_name, col_type in required_columns.items():
@@ -1176,8 +1317,8 @@ def add_received_product(product, auth_system):
     cursor.execute('''
         INSERT INTO received_products 
         (product_code, description, quantity, unit, department, received_by, 
-         received_date, supplier_batch, sell_by_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         received_date, supplier_batch, sell_by_date, barcode_data, barcode_image)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         product['Product Code'],
         product['Product Description'],  # Changed from Description
@@ -1187,7 +1328,9 @@ def add_received_product(product, auth_system):
         current_user['username'],
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         product.get('Supplier Batch No', ''),  # Changed from Supplier Batch
-        product.get('Sell By Date', '')
+        product.get('Sell By Date', ''),
+        product.get('barcode_data', ''),
+        product.get('barcode_image', '')
     ))
     
     conn.commit()
@@ -1227,6 +1370,16 @@ def get_department_inventory(department):
         item['Department'] = item.pop('department')
         item['Handling History'] = item.pop('handling_history', '')
         item['Temperature Log'] = item.pop('temperature_log', '').split('\n') if item.get('temperature_log') else []
+        
+        # Extract barcode information from handling history
+        if item['Handling History']:
+            history_lines = item['Handling History'].split('\n')
+            for line in history_lines:
+                if line.startswith('Barcode Generated:'):
+                    item['barcode_data'] = line.replace('Barcode Generated:', '').strip()
+                elif line.startswith('Barcode Path:'):
+                    item['barcode_path'] = line.replace('Barcode Path:', '').strip()
+        
         inventory.append(item)
     
     conn.close()
@@ -1293,7 +1446,9 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                     description,
                     processed_by,
                     processing_date,
-                    handling_history
+                    handling_history,
+                    barcode_data,
+                    barcode_image
                 FROM received_products
                 WHERE 1=1
             '''
@@ -1323,7 +1478,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
             # Format results for display
             formatted_results = []
             for row in results:
-                formatted_row = list(row[:9])  # Get all columns except handling_history
+                formatted_row = list(row[:9])  # Get all columns except handling_history, barcode_data, barcode_image
                 formatted_results.append(formatted_row)
                 
             window['-DB-TABLE-'].update(formatted_results)
@@ -1716,6 +1871,65 @@ Generated by SPATRAC System
 """
     
     return header + body + footer
+
+def show_product_details(product, auth_system):
+    """Display detailed product information including barcode."""
+    user_info = auth_system.get_current_user_info()
+    manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
+    
+    # Create temporary file for barcode image if available
+    barcode_image_path = None
+    if product.get('barcode_image'):
+        try:
+            import tempfile
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            temp.write(base64.b64decode(product['barcode_image']))
+            temp.close()
+            barcode_image_path = temp.name
+        except Exception as e:
+            print(f"Error creating barcode image: {str(e)}")
+    
+    layout = [
+        [sg.Text('Product Details', font=FONT_HEADER)],
+        [sg.Text(manager_info, font=FONT_SMALL)],
+        [sg.Text(f"Product Code: {product['Product Code']}")],
+        [sg.Text(f"Product Description: {product['Product Description']}")],
+        [sg.Text(f"Quantity: {product['Quantity']} {product['Unit']}")],
+        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
+        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
+        [sg.Text(f"Received Date: {product.get('Received Date', 'N/A')}")],
+        [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
+        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
+        [sg.Text(f"Barcode Data: {product.get('barcode_data', 'N/A')}")],
+    ]
+    
+    if barcode_image_path:
+        layout.append([sg.Image(barcode_image_path)])
+    
+    layout.extend([
+        [sg.Text('Handling History:')],
+        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
+        [sg.Text('Temperature Log:')],
+        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
+        [sg.Button('Close')]
+    ])
+    
+    details_window = sg.Window('Product Details', layout, modal=True)
+    
+    while True:
+        event, _ = details_window.read()
+        if event in (sg.WIN_CLOSED, 'Close'):
+            break
+    
+    details_window.close()
+    
+    # Clean up temporary barcode image file
+    if barcode_image_path:
+        try:
+            import os
+            os.unlink(barcode_image_path)
+        except:
+            pass
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
