@@ -75,6 +75,9 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
     current_user = auth_system.get_current_user_info()
     delivery_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # Generate barcode for the product
+    barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
+    
     # Create the initial product dictionary with consistent key names
     product_dict = {
         'Product Code': product_code,
@@ -83,8 +86,10 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
         'Unit': unit,
         'Supplier Batch No': supplier_batch,
         'Sell By Date': sell_by_date,
-        'Delivery Date': delivery_date,  # Added to maintain consistency
-        'Received By': current_user['username']  # Added to maintain consistency
+        'Delivery Date': delivery_date,
+        'Received By': current_user['username'],
+        'barcode_data': barcode_info['barcode_data'] if barcode_info else None,
+        'barcode_image': barcode_info['barcode_image'] if barcode_info else None
     }
     
     add_received_product(product_dict, auth_system)
@@ -111,7 +116,9 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
         'Received By': current_user["username"],
         'Processed By': '',
         'Delivery Approved By': '',
-        'Delivery Approval Date': ''
+        'Delivery Approval Date': '',
+        'barcode_data': barcode_info['barcode_data'] if barcode_info else None,
+        'barcode_image': barcode_info['barcode_image'] if barcode_info else None
     }
 
 def approve_delivery(product, auth_system):
@@ -242,50 +249,74 @@ def add_product_to_inventory(values, auth_system):
     except Exception as e:
         return False, f"Error adding product: {str(e)}"
 
-def show_product_details(product, auth_system):
-    """Display detailed product information including barcode."""
+def show_database_product_details(product, auth_system):
+    """Display detailed product information from the database view."""
     user_info = auth_system.get_current_user_info()
     manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
     
-    # Extract barcode information from handling_history
-    barcode_path = None
-    barcode_data = None
-    if 'Handling History' in product:
-        history_lines = product['Handling History'].split('\n')
-        for line in history_lines:
-            if line.startswith('Barcode Generated:'):
-                barcode_data = line.replace('Barcode Generated:', '').strip()
-            elif line.startswith('Barcode Path:'):
-                barcode_path = line.replace('Barcode Path:', '').strip()
+    # Create temporary file for barcode image if available
+    barcode_image_path = None
+    if product.get('barcode_image'):
+        try:
+            import tempfile
+            from PIL import Image
+            import io
+            
+            # Convert base64 to image
+            image_data = base64.b64decode(product['barcode_image'])
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Create temporary file
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            image.save(temp.name, format='PNG')
+            temp.close()
+            barcode_image_path = temp.name
+        except Exception as e:
+            print(f"Error creating barcode image: {str(e)}")
     
     layout = [
-        [sg.Text('Product Details', font=FONT_HEADER)],
+        [sg.Text('Database Product Details', font=FONT_HEADER)],
         [sg.Text(manager_info, font=FONT_SMALL)],
-        [sg.Text(f"Product Code: {product['Product Code']}")],
-        [sg.Text(f"Product Description: {product['Product Description']}")],
-        [sg.Text(f"Quantity: {product['Quantity']} {product['Unit']}")],
-        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
-        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
-        [sg.Text(f"Received Date: {product.get('Received Date', 'N/A')}")],
-        [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
-        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
+        [sg.Text(f"Product Code: {product.get('product_code', 'N/A')}")],
+        [sg.Text(f"Description: {product.get('description', 'N/A')}")],
+        [sg.Text(f"Quantity: {product.get('quantity', 'N/A')} {product.get('unit', '')}")],
+        [sg.Text(f"Department: {product.get('department', 'N/A')}")],
+        [sg.Text(f"Status: {product.get('status', 'N/A')}")],
+        [sg.Text(f"Supplier Batch: {product.get('supplier_batch', 'N/A')}")],
+        [sg.Text(f"Sell by Date: {product.get('sell_by_date', 'N/A')}")],
+        [sg.Text(f"Received Date: {product.get('received_date', 'N/A')}")],
+        [sg.Text(f"Received By: {product.get('received_by', 'N/A')}")],
     ]
     
-    if barcode_data:
-        layout.append([sg.Text(f"Barcode Data: {barcode_data}")])
+    # Add barcode section if available
+    if product.get('barcode_data'):
+        layout.extend([
+            [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
+            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
+        ])
+        if barcode_image_path:
+            layout.append([sg.Image(barcode_image_path, size=(300, 100))])
     
-    if barcode_path and os.path.exists(barcode_path):
-        layout.append([sg.Image(barcode_path)])
+    # Add processing information if available
+    if product.get('processed_by'):
+        layout.extend([
+            [sg.Text('Processing Information', font=('Helvetica', 10, 'bold'))],
+            [sg.Text(f"Processed By: {product['processed_by']}")],
+            [sg.Text(f"Processing Date: {product.get('processing_date', 'N/A')}")],
+        ])
     
     layout.extend([
-        [sg.Text('Handling History:')],
-        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
-        [sg.Text('Temperature Log:')],
-        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
+        [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
+        [sg.Multiline(product.get('handling_history', 'No handling history available'), size=(60, 5), disabled=True)],
+        [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
+        [sg.Multiline(product.get('temperature_log', 'No temperature readings available'), size=(60, 3), disabled=True)],
         [sg.Button('Close')]
     ])
     
-    details_window = sg.Window('Product Details', layout, modal=True)
+    details_window = sg.Window('Database Product Details', layout, modal=True, finalize=True)
+    
+    # Center the window on screen
+    details_window.move(details_window.current_location()[0], 0)
     
     while True:
         event, _ = details_window.read()
@@ -293,6 +324,14 @@ def show_product_details(product, auth_system):
             break
     
     details_window.close()
+    
+    # Clean up temporary barcode image file
+    if barcode_image_path:
+        try:
+            import os
+            os.unlink(barcode_image_path)
+        except:
+            pass
 
 # New function for search suggestions
 def get_search_suggestions(df, search_term):
@@ -510,6 +549,7 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
             window['-DEPARTMENT-'].update(product_info['Department'])
             window['-PRODUCT-'].update(product_info['Product Code'])
             window['-SUPPLIER_PRODUCT-'].update(product_info['Supplier Product Code'])
+    
     if event == '-PRODUCT_DESC-':
         selected_product = values['-PRODUCT_DESC-']
         if selected_product:
@@ -544,7 +584,7 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
             barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
             if barcode_info:
                 product['barcode_data'] = barcode_info['barcode_data']
-                product['barcode_path'] = barcode_info['barcode_path']
+                product['barcode_image'] = barcode_info['barcode_image']
             
             inventory.append(product)
             update_inventory_table(window, inventory)
@@ -1611,6 +1651,8 @@ def show_database_product_details(product, auth_system):
         [sg.Text(f"Processed By: {product.get('processed_by', 'N/A')}")],
         [sg.Text('Handling History:', font=FONT_NORMAL)],
         [sg.Multiline(history_text, size=(60, 5), disabled=True)],
+        [sg.Text('Temperature Log:', font=FONT_NORMAL)],
+        [sg.Multiline('\n'.join(product.get('temperature_log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
         [sg.Button('Close')]
     ]
     
@@ -1881,8 +1923,16 @@ def show_product_details(product, auth_system):
     if product.get('barcode_image'):
         try:
             import tempfile
+            from PIL import Image
+            import io
+            
+            # Convert base64 to image
+            image_data = base64.b64decode(product['barcode_image'])
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Create temporary file
             temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-            temp.write(base64.b64decode(product['barcode_image']))
+            image.save(temp.name, format='PNG')
             temp.close()
             barcode_image_path = temp.name
         except Exception as e:
@@ -1899,21 +1949,29 @@ def show_product_details(product, auth_system):
         [sg.Text(f"Received Date: {product.get('Received Date', 'N/A')}")],
         [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
         [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
-        [sg.Text(f"Barcode Data: {product.get('barcode_data', 'N/A')}")],
     ]
     
-    if barcode_image_path:
-        layout.append([sg.Image(barcode_image_path)])
+    # Add barcode section if available
+    if product.get('barcode_data'):
+        layout.extend([
+            [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
+            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
+        ])
+        if barcode_image_path:
+            layout.append([sg.Image(barcode_image_path, size=(300, 100))])
     
     layout.extend([
-        [sg.Text('Handling History:')],
+        [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
         [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
-        [sg.Text('Temperature Log:')],
+        [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
         [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
         [sg.Button('Close')]
     ])
     
-    details_window = sg.Window('Product Details', layout, modal=True)
+    details_window = sg.Window('Product Details', layout, modal=True, finalize=True)
+    
+    # Center the window on screen
+    details_window.move(details_window.current_location()[0], 0)
     
     while True:
         event, _ = details_window.read()
