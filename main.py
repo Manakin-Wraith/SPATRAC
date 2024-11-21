@@ -172,20 +172,19 @@ def generate_product_barcode(product_code, batch_no, sell_by_date):
         # Create a unique identifier combining product info
         barcode_data = f"{product_code}|{batch_no}|{sell_by_date}"
         
-        # Create barcodes directory if it doesn't exist
-        barcode_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'barcodes')
-        os.makedirs(barcode_dir, exist_ok=True)
-        
-        # Generate the barcode
+        # Generate the barcode in memory
         code128 = Code128(barcode_data, writer=ImageWriter())
         
-        # Save barcode to file
-        barcode_path = os.path.join(barcode_dir, f"{product_code}_{batch_no}.png")
-        code128.save(barcode_path)
+        # Save barcode to BytesIO buffer
+        buffer = io.BytesIO()
+        code128.write(buffer)
+        
+        # Convert to base64
+        barcode_image = base64.b64encode(buffer.getvalue()).decode()
         
         return {
             'barcode_data': barcode_data,
-            'barcode_path': barcode_path
+            'barcode_image': barcode_image
         }
     except Exception as e:
         print(f"Error generating barcode: {str(e)}")
@@ -208,9 +207,6 @@ def add_product_to_inventory(values, auth_system):
         if not barcode_info:
             return False, "Failed to generate barcode"
 
-        # Store barcode data in handling_history
-        handling_history = f"Barcode Generated: {barcode_info['barcode_data']}\nBarcode Path: {barcode_info['barcode_path']}"
-
         conn = sqlite3.connect('spatrac.db')
         cursor = conn.cursor()
         
@@ -218,8 +214,9 @@ def add_product_to_inventory(values, auth_system):
             INSERT INTO received_products (
                 product_code, description, quantity, unit, 
                 supplier_batch, sell_by_date, received_date,
-                received_by, status, department, handling_history
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                received_by, status, department, handling_history,
+                barcode_data, barcode_image
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             values['-PRODUCT_CODE-'],
             values['-DESCRIPTION-'],
@@ -231,7 +228,9 @@ def add_product_to_inventory(values, auth_system):
             current_user['username'],
             'active',
             current_user['department'],
-            handling_history
+            f"Product added by {current_user['username']} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            barcode_info['barcode_data'],
+            barcode_info['barcode_image']
         ))
         
         conn.commit()
