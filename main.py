@@ -309,7 +309,7 @@ def show_database_product_details(product, auth_system):
         [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
         [sg.Multiline(product.get('handling_history', 'No handling history available'), size=(60, 5), disabled=True)],
         [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline(product.get('temperature_log', 'No temperature readings available'), size=(60, 3), disabled=True)],
+        [sg.Multiline('\n'.join(product.get('temperature_log', ['No temperature log available'])), size=(60, 3), disabled=True)],
         [sg.Button('Close')]
     ])
     
@@ -1554,7 +1554,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                 pdf.set_font("Arial", "B", 16)
                 
                 # Title
-                pdf.cell(0, 10, f"SPATRAC Database Search Results", ln=True, align='C')
+                pdf.cell(0, 10, "SPATRAC Database Search Results", ln=True, align='C')
                 pdf.ln(10)
                 
                 # Date Range
@@ -1647,21 +1647,52 @@ def show_database_product_details(product, auth_system):
         [sg.Text(f"Supplier Batch: {product.get('supplier_batch', 'N/A')}")],
         [sg.Text(f"Received Date: {received_date}")],
         [sg.Text(f"Received By: {product.get('received_by', 'N/A')}")],
-        [sg.Text(f"Processing Date: {processing_date}")],
-        [sg.Text(f"Processed By: {product.get('processed_by', 'N/A')}")],
-        [sg.Text('Handling History:', font=FONT_NORMAL)],
-        [sg.Multiline(history_text, size=(60, 5), disabled=True)],
-        [sg.Text('Temperature Log:', font=FONT_NORMAL)],
-        [sg.Multiline('\n'.join(product.get('temperature_log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
-        [sg.Button('Close')]
     ]
     
-    window = sg.Window('Product Details', layout, modal=True)
+    # Add barcode section if available
+    if product.get('barcode_data'):
+        layout.extend([
+            [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
+            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
+        ])
+        if product.get('barcode_image'):
+            layout.append([sg.Image(product['barcode_image'], size=(300, 100))])
+    
+    # Add processing information if available
+    if product.get('processed_by'):
+        layout.extend([
+            [sg.Text('Processing Information', font=('Helvetica', 10, 'bold'))],
+            [sg.Text(f"Processed By: {product['processed_by']}")],
+            [sg.Text(f"Processing Date: {processing_date}")],
+        ])
+    
+    layout.extend([
+        [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
+        [sg.Multiline(history_text, size=(60, 5), disabled=True)],
+        [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
+        [sg.Multiline('\n'.join(product.get('temperature_log', ['No temperature log available'])), size=(60, 3), disabled=True)],
+        [sg.Button('Close')]
+    ])
+    
+    details_window = sg.Window('Product Details', layout, modal=True, finalize=True)
+    
+    # Center the window on screen
+    details_window.move(details_window.current_location()[0], 0)
+    
     while True:
-        event, values = window.read()
+        event, _ = details_window.read()
         if event in (sg.WIN_CLOSED, 'Close'):
             break
-    window.close()
+    
+    details_window.close()
+    
+    # Clean up temporary barcode image file
+    if product.get('barcode_image'):
+        try:
+            import os
+            os.unlink(product['barcode_image'])
+        except:
+            pass
 
 def load_final_products(department):
     """Load final products for a specific department."""
@@ -1987,6 +2018,48 @@ def show_product_details(product, auth_system):
             os.unlink(barcode_image_path)
         except:
             pass
+
+def generate_inventory_summary(inventory, start_date, end_date, auth_system):
+    """Generate an inventory summary report for the specified date range."""
+    try:
+        if not auth_system or not auth_system.get_current_user_info():
+            raise ValueError("User not authenticated")
+            
+        # Filter inventory by date range
+        filtered_inventory = [
+            item for item in inventory 
+            if start_date.date() <= datetime.strptime(item.get('Received Date', '1900-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S').date() <= end_date.date()
+        ]
+        
+        return filtered_inventory
+    except Exception as e:
+        raise Exception(f"Error generating inventory summary: {str(e)}")
+
+def generate_traceability_report(inventory, start_date, end_date, auth_system):
+    """Generate a traceability report for the specified date range."""
+    try:
+        if not auth_system or not auth_system.get_current_user_info():
+            raise ValueError("User not authenticated")
+            
+        # Filter inventory by date range
+        filtered_inventory = [
+            item for item in inventory 
+            if start_date.date() <= datetime.strptime(item.get('Received Date', '1900-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S').date() <= end_date.date()
+        ]
+        
+        # Sort by received date for better traceability
+        filtered_inventory.sort(key=lambda x: x.get('Received Date', ''))
+        
+        # Enhance each item with handling history if available
+        for item in filtered_inventory:
+            if isinstance(item.get('Handling History', ''), list):
+                item['Handling History'] = '\n'.join(item['Handling History'])
+            if isinstance(item.get('Temperature Log', ''), list):
+                item['Temperature Log'] = '\n'.join(item['Temperature Log'])
+        
+        return filtered_inventory
+    except Exception as e:
+        raise Exception(f"Error generating traceability report: {str(e)}")
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
