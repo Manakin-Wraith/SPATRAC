@@ -405,19 +405,6 @@ def create_gui(df):
 def create_product_management_tab(df, departments):
     all_product_descriptions = sorted(df['Product Description'].unique().tolist())
     
-    department_frames = []
-    for dept in departments:
-        frame_layout = [
-            [sg.Table(values=[],
-                      headings=['Product Code', 'Description', 'Quantity', 'Unit', 'Status'],
-                      display_row_numbers=False,
-                      auto_size_columns=True,
-                      num_rows=5,
-                      key=f'-{dept.upper()}_TABLE-',
-                      enable_events=True)]
-        ]
-        department_frames.append(sg.Frame(f'{dept} Window', frame_layout, key=f'-{dept.upper()}_FRAME-'))
-
     return [
         [sg.Frame('Product Selection', [
             [sg.Text('Product Description:', size=(15, 1)),
@@ -440,8 +427,7 @@ def create_product_management_tab(df, departments):
              sg.Input(key='-SELL_BY_DATE-', size=(10, 1), default_text=datetime.now().strftime('%Y-%m-%d')),
              sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
             [sg.Button('Receive Product', key='-DELIVER-', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))],
-        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
-        department_frames
+        ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)]
     ]
 
 def create_receiving_tab():
@@ -595,17 +581,8 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
             window['-PRODUCT_DESC-'].update(values=all_product_descriptions)        
 
 def update_department_tables(window, inventory):
-    departments = ['HMR', 'Butchery', 'Bakery']
-    for dept in departments:
-        dept_inventory = [item for item in inventory if item['Department'].lower() == dept.lower()]
-        window[f'-{dept.upper()}_TABLE-'].update([
-            [item['Product Code'],
-             item['Product Description'],
-             item['Quantity'],
-             item['Unit'],
-             item['Status']]
-            for item in dept_inventory
-        ])
+    # Function kept for compatibility but no longer updates department tables
+    pass
 
 def handle_receiving_events(event, values, window, inventory, auth_system):
     if event == '-RECEIVING_TABLE-':
@@ -1169,11 +1146,6 @@ def refresh_display(window, inventory, auth_system):
     """
     Safely refresh the display without modifying processed product data.
     Only updates the visual representation of data that hasn't been processed.
-    
-    Args:
-        window: The PySimpleGUI window object
-        inventory: The current inventory data
-        auth_system: The authentication system for access control
     """
     # Get current user's info
     current_user = auth_system.get_current_user_info()
