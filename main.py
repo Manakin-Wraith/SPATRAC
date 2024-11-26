@@ -3,16 +3,17 @@ import PySimpleGUI as sg
 import csv
 from fpdf import FPDF
 from datetime import datetime
+import sqlite3
+import json
+import base64
+import os
+import tempfile
+import io
+from PIL import Image
 import barcode
 from barcode import Code128
 from barcode.writer import ImageWriter
-import io
-from PIL import Image
 from auth_system import AuthSystem
-import json
-import sqlite3
-import base64
-import os
 
 # Constants
 FONT_HEADER = ('Helvetica', 24)
@@ -87,58 +88,40 @@ SUB_DEPT_MAPPING = {
 }
 
 # Product operations
-def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system):
-    product = df[df['Product Code'] == product_code].iloc[0]
-    batch_lot = f'LOT-{datetime.now().strftime("%Y%m%d")}-{product_code}'
-    current_user = auth_system.get_current_user_info()
-    delivery_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Generate barcode for the product
-    barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
-    
-    # Create the initial product dictionary with consistent key names
-    product_dict = {
-        'Product Code': product_code,
-        'Product Description': product['Product Description'],
-        'Quantity': quantity,
-        'Unit': unit,
-        'Supplier Batch No': supplier_batch,
-        'Sell By Date': sell_by_date,
-        'Delivery Date': delivery_date,
-        'Received By': current_user['username'],
-        'barcode_data': barcode_info['barcode_data'] if barcode_info else None,
-        'barcode_image': barcode_info['barcode_image'] if barcode_info else None,
-        'Status': 'Active'
-    }
-    
-    add_received_product(product_dict, auth_system)
-    
-    return {
-        'Product Code': product_code,
-        'Supplier Product Code': product['Supplier Product Code'],
-        'Product Description': product['Product Description'],
-        'Supplier': product['Supplier Name'],
-        'Batch/Lot': batch_lot,
-        'Supplier Batch No': supplier_batch,
-        'Sell By Date': sell_by_date,
-        'Department': product['Department'].strip(),
-        'Sub-Department': SUB_DEPT_MAPPING.get(str(product['Sub-Department']), ('Unknown', 'Unknown'))[1].strip(),
-        'Quantity': quantity,
-        'Unit': unit,
-        'Delivery Date': delivery_date,
-        'Status': 'Delivered',
-        'Processing Date': '',
-        'Current Location': 'Receiving',
-        'Handling History': f'Received at {delivery_date} by {current_user["username"]}',
-        'Quality Checks': 'Initial check: Passed',
-        'Temperature Log': [],
-        'Received By': current_user["username"],
-        'Processed By': '',
-        'Delivery Approved By': '',
-        'Delivery Approval Date': '',
-        'barcode_data': barcode_info['barcode_data'] if barcode_info else None,
-        'barcode_image': barcode_info['barcode_image'] if barcode_info else None
-    }
+def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system, window):
+    """Deliver a product to inventory."""
+    try:
+        # Get product details from the database
+        product = df[df['Product Code'] == product_code].iloc[0].to_dict()
+        
+        # Create a new product entry
+        new_product = {
+            'Product Code': product_code,
+            'Product Description': product.get('Product Description', ''),
+            'Quantity': quantity,
+            'Unit': unit,
+            'Supplier Batch No': supplier_batch,
+            'Sell By Date': sell_by_date,
+            'Temperature Log': [],  # Initialize empty temperature log
+            'Handling History': []  # Initialize empty handling history
+        }
+        
+        # Record temperature before adding to inventory
+        temp_log = record_temperature_popup()
+        if temp_log is None:
+            sg.popup_error('Temperature recording cancelled. Product not received.', font=FONT_NORMAL)
+            return None
+            
+        new_product['Temperature Log'].append(temp_log)
+        
+        # Add the product to inventory
+        if add_received_product(new_product, auth_system, window):
+            return new_product
+        return None
+        
+    except Exception as e:
+        sg.popup_error('Error', f'Failed to deliver product: {str(e)}', font=FONT_NORMAL)
+        return None
 
 def approve_delivery(product, auth_system):
     current_user = auth_system.get_current_user_info()
@@ -456,7 +439,7 @@ def create_product_management_tab(df, departments):
             [sg.Text('Sell by Date', size=(15, 1)),
              sg.Input(key='-SELL_BY_DATE-', size=(10, 1), default_text=datetime.now().strftime('%Y-%m-%d')),
              sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Button('Receive Product', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Button('Receive Product', key='-DELIVER-', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))],
         ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
         department_frames
     ]
@@ -554,6 +537,28 @@ def get_search_suggestions(df, search_term):
     return suggestions[:10]  # Limit to top 10 suggestions
 
 def handle_product_management_events(event, values, window, df, inventory, auth_system):
+    """Handle events in the Product Management tab."""
+    if event == '-DELIVER-':
+        product_code = values['-PRODUCT-']
+        quantity = values['-QUANTITY-']
+        unit = values['-UNIT-']
+        supplier_batch = values['-SUPPLIER_BATCH-']
+        sell_by_date = values['-SELL_BY_DATE-']
+        
+        if product_code and quantity and supplier_batch and sell_by_date:
+            product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system, window)
+            if product is not None:
+                barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
+                if barcode_info:
+                    product['barcode_data'] = barcode_info['barcode_data']
+                    product['barcode_image'] = barcode_info['barcode_image']
+                
+                inventory.append(product)
+                update_inventory_table(window, inventory)
+                update_department_tables(window, inventory)
+        else:
+            sg.popup_error('Please fill in all required fields', font=FONT_NORMAL)
+
     if event == '-SEARCH-':
         search_term = values['-SEARCH-']
         if search_term:
@@ -589,33 +594,6 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
             all_product_descriptions = sorted(df['Product Description'].unique().tolist())
             window['-PRODUCT_DESC-'].update(values=all_product_descriptions)        
 
-    if event == 'Receive Product':
-        product_code = values['-PRODUCT-']
-        quantity = values['-QUANTITY-']
-        unit = values['-UNIT-']
-        supplier_batch = values['-SUPPLIER_BATCH-']
-        sell_by_date = values['-SELL_BY_DATE-']
-        
-
-        if product_code and quantity and supplier_batch and sell_by_date:
-            product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system)
-            temp_log = record_temperature_popup()
-            if temp_log:
-                product['Temperature Log'].append(temp_log)
-            
-            barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
-            if barcode_info:
-                product['barcode_data'] = barcode_info['barcode_data']
-                product['barcode_image'] = barcode_info['barcode_image']
-            
-            inventory.append(product)
-            update_inventory_table(window, inventory)
-            update_department_tables(window, inventory)
-            sg.popup('Product received successfully', font=FONT_NORMAL)
-        else:
-            sg.popup_error('Please fill in all required fields', font=FONT_NORMAL)
-
-# Add a new function to update department-specific tables
 def update_department_tables(window, inventory):
     departments = ['HMR', 'Butchery', 'Bakery']
     for dept in departments:
@@ -788,7 +766,8 @@ def process_selected_products(auth_system, inventory, selected_products, window)
     for product in selected_products:
         temp_log = record_temperature_popup()
         if temp_log:
-            if 'Temperature Log' not in product:
+            # Initialize Temperature Log as a list if it doesn't exist or is a string
+            if 'Temperature Log' not in product or isinstance(product['Temperature Log'], str):
                 product['Temperature Log'] = []
             product['Temperature Log'].append(temp_log)
             
@@ -1196,34 +1175,39 @@ def refresh_display(window, inventory, auth_system):
         inventory: The current inventory data
         auth_system: The authentication system for access control
     """
-    # Get current user's department
+    # Get current user's info
     current_user = auth_system.get_current_user_info()
     if current_user is None:
         return False
         
     try:
-        # Get fresh inventory data for unprocessed items from the department
-        department_inventory = get_department_inventory(current_user['department'])
+        # Get fresh inventory data for the department
+        fresh_inventory = get_department_inventory(current_user['department'])
+        if fresh_inventory is None:
+            fresh_inventory = []
+            
+        # Keep track of processed items from current inventory
+        processed_items = [item for item in inventory if item.get('Status') == 'Processed']
         
-        # Separate processed and unprocessed items in current inventory
-        processed_items = [item for item in inventory if item['Status'] == 'Processed']
+        # Create a new inventory list with both processed and fresh items
+        new_inventory = processed_items + fresh_inventory
         
-        # Clear and update inventory with processed items and fresh unprocessed items
+        # Sort inventory by received date (newest first)
+        new_inventory.sort(key=lambda x: datetime.strptime(x.get('Received Date', '1900-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S'), reverse=True)
+        
+        # Clear and update the inventory list
         inventory.clear()
-        inventory.extend(processed_items)  # Keep processed items unchanged
-        inventory.extend(department_inventory)  # Add fresh unprocessed items
+        inventory.extend(new_inventory)
         
-        # Update the display tables
-        update_processed_table(window, inventory)
+        # Update both tables
         update_inventory_table(window, inventory)
+        update_processed_table(window, inventory)
         
         return True
         
     except Exception as e:
         sg.popup_error('Database Error', f'Error refreshing data: {str(e)}')
         return False
-    
-    return True
 
 def show_login_window(auth_system):
     """Show login window and handle authentication."""
@@ -1483,84 +1467,144 @@ def initialize_database():
     conn.commit()
     conn.close()
 
-def add_received_product(product, auth_system):
-    conn = sqlite3.connect('spatrac.db')
-    cursor = conn.cursor()
-    
-    current_user = auth_system.get_current_user_info()
-    
-    cursor.execute('''
-        INSERT INTO received_products 
-        (product_code, description, quantity, unit, department, received_by, 
-         received_date, supplier_batch, sell_by_date, status, barcode_data, barcode_image)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        product['Product Code'],
-        product['Product Description'],
-        product['Quantity'],
-        product['Unit'],
-        current_user['department'],
-        current_user['username'],
-        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        product['Supplier Batch No'],  # Changed from 'Supplier Batch' to 'Supplier Batch No'
-        product['Sell By Date'],
-        'Active',
-        product.get('barcode_data', ''),
-        product.get('barcode_image', '')
-    ))
-    
-    conn.commit()
-    conn.close()
+def add_received_product(product, auth_system, window=None):
+    """Add a new product to the received products database."""
+    try:
+        user_info = auth_system.get_current_user_info()
+        if not user_info:
+            return False
+            
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Initialize lists for tracking
+        if 'Temperature Log' not in product or isinstance(product['Temperature Log'], str):
+            product['Temperature Log'] = []
+        if 'Handling History' not in product or isinstance(product['Handling History'], str):
+            product['Handling History'] = []
+            
+        # Add receiving history
+        product['Handling History'].append(
+            f"Received on {current_time} by {user_info['username']} ({user_info['role']} - {user_info['department']})"
+        )
+        
+        # Add receiving information
+        product['Received Date'] = current_time
+        product['Received By'] = user_info['username']
+        product['Status'] = 'Active'
+        product['Department'] = user_info['department']  # Add department information
+        
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO received_products (
+                product_code, description, quantity, unit,
+                supplier_batch, sell_by_date, status,
+                received_date, received_by, handling_history,
+                temperature_log, department
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            product['Product Code'],
+            product['Product Description'],
+            product['Quantity'],
+            product['Unit'],
+            product['Supplier Batch No'],
+            product['Sell By Date'],
+            product['Status'],
+            product['Received Date'],
+            product['Received By'],
+            json.dumps(product['Handling History']),
+            json.dumps(product['Temperature Log']),
+            product['Department']
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        # If window is provided, refresh the display
+        if window is not None:
+            refresh_display(window, [], auth_system)
+            
+        return True
+        
+    except Exception as e:
+        sg.popup_error('Error', f'Failed to add product: {str(e)}', font=FONT_NORMAL)
+        return False
 
 def get_department_inventory(department):
+    """
+    Get the inventory for a specific department.
+    
+    Args:
+        department: The department to get inventory for
+        
+    Returns:
+        List of inventory items for the department
+    """
     conn = sqlite3.connect('spatrac.db')
     cursor = conn.cursor()
     
-    cursor.execute('''
-        SELECT product_code, description, quantity, unit, supplier_batch, 
-               sell_by_date, received_date, received_by, status, department,
-               COALESCE(handling_history, '') as handling_history,
-               COALESCE(temperature_log, '') as temperature_log,
-               COALESCE(barcode_data, '') as barcode_data,
-               COALESCE(barcode_image, '') as barcode_image
-        FROM received_products
-        WHERE department = ? AND status = 'Active'
-        ORDER BY received_date DESC
-    ''', (department,))
-    
-    # Get column names from cursor description
-    columns = [desc[0] for desc in cursor.description]
-    
-    # Convert tuples to dictionaries
-    inventory = []
-    for row in cursor.fetchall():
-        item = dict(zip(columns, row))
-        # Convert to expected keys
-        item['Product Code'] = item.pop('product_code')
-        item['Product Description'] = item.pop('description')
-        item['Quantity'] = item.pop('quantity')
-        item['Unit'] = item.pop('unit')
-        item['Supplier Batch No'] = item.pop('supplier_batch')
-        item['Sell By Date'] = item.pop('sell_by_date')
-        item['Received Date'] = item.pop('received_date')
-        item['Received By'] = item.pop('received_by')
-        item['Status'] = item.pop('status')
-        item['Department'] = item.pop('department')
-        item['Handling History'] = item.pop('handling_history', '')
-        item['Temperature Log'] = item.pop('temperature_log', '').split('\n') if item.get('temperature_log') else []
+    try:
+        cursor.execute('''
+            SELECT product_code, description, quantity, unit, supplier_batch, 
+                   sell_by_date, received_date, received_by, status, department,
+                   COALESCE(handling_history, '[]') as handling_history,
+                   COALESCE(temperature_log, '[]') as temperature_log,
+                   COALESCE(barcode_data, '') as barcode_data,
+                   COALESCE(barcode_image, '') as barcode_image
+            FROM received_products
+            WHERE department = ? AND status = 'Active'
+            ORDER BY received_date DESC
+        ''', (department,))
         
-        # Add barcode data if available
-        barcode_data = item.pop('barcode_data', '')
-        barcode_image = item.pop('barcode_image', '')
-        if barcode_data:
-            item['barcode_data'] = barcode_data
-        if barcode_image:
-            item['barcode_image'] = barcode_image
+        # Get column names from cursor description
+        columns = [desc[0] for desc in cursor.description]
         
-        inventory.append(item)
-    
-    conn.close()
-    return inventory
+        # Convert tuples to dictionaries
+        inventory = []
+        for row in cursor.fetchall():
+            item = dict(zip(columns, row))
+            # Convert to expected keys
+            item['Product Code'] = item.pop('product_code')
+            item['Product Description'] = item.pop('description')
+            item['Quantity'] = item.pop('quantity')
+            item['Unit'] = item.pop('unit')
+            item['Supplier Batch No'] = item.pop('supplier_batch')
+            item['Sell By Date'] = item.pop('sell_by_date')
+            item['Delivery Date'] = item.pop('received_date')  # Align with display name
+            item['Received By'] = item.pop('received_by')
+            item['Status'] = item.pop('status')
+            item['Department'] = item.pop('department')
+            
+            # Parse JSON strings for lists
+            try:
+                item['Handling History'] = json.loads(item.pop('handling_history'))
+            except json.JSONDecodeError:
+                item['Handling History'] = []
+                
+            try:
+                item['Temperature Log'] = json.loads(item.pop('temperature_log'))
+            except json.JSONDecodeError:
+                item['Temperature Log'] = []
+            
+            # Add barcode data if available
+            barcode_data = item.pop('barcode_data', '')
+            barcode_image = item.pop('barcode_image', '')
+            if barcode_data:
+                item['barcode_data'] = barcode_data
+            if barcode_image:
+                item['barcode_image'] = barcode_image
+            
+            inventory.append(item)
+        
+        return inventory
+        
+    except Exception as e:
+        print(f"Error retrieving department inventory: {e}")
+        return []
+        
+    finally:
+        conn.close()
 
 def update_inventory_table(window, inventory):
     """Update the inventory table with active (unprocessed) items."""
@@ -2147,7 +2191,7 @@ def generate_traceability_report(inventory, start_date, end_date, auth_system):
         ]
         
         # Sort by received date for better traceability
-        filtered_inventory.sort(key=lambda x: x.get('Received Date', ''))
+        filtered_inventory.sort(key=lambda x: datetime.strptime(x.get('Received Date', ''), '%Y-%m-%d %H:%M:%S'), reverse=True)
         
         # Enhance each item with handling history if available
         for item in filtered_inventory:
@@ -2182,7 +2226,7 @@ def delete_all_active_products():
         
         return True, f"Successfully deleted {count} active products"
     except Exception as e:
-        print(f"Error deleting active products: {str(e)}")
+        print(f"Error deleting active products: {e}")
         return False, f"Error deleting active products: {str(e)}"
 
 if __name__ == "__main__":
