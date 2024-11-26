@@ -26,7 +26,8 @@ COLORS = {
     'text': '#202124',
     'success': '#0f9d58',
     'warning': '#f4b400',
-    'error': '#d93025'
+    'error': '#d93025',
+    'danger': '#d93025'  # Using the same color as error for danger
 }
 
 # Load the data
@@ -38,20 +39,37 @@ def load_data(file_paths):
     ]
     
     for file_path in file_paths:
-        df = pd.read_csv(file_path, encoding='iso-8859-1', sep=';')
-        df.columns = df.iloc[0]
-        df = df.iloc[1:].reset_index(drop=True)
-        df = df[required_columns]
-        department = file_path.split()[0].lower()
-        df['Department'] = department
-        dfs.append(df)
+        try:
+            df = pd.read_csv(file_path, encoding='iso-8859-1', sep=';')
+            df.columns = df.iloc[0]
+            df = df.iloc[1:]  # Remove the first row since it's now the header
+            
+            # Check if all required columns are present
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                print(f"Warning: Missing required columns in {file_path}: {missing_cols}")
+                continue
+                
+            # Select only required columns and add Status column
+            df = df[required_columns].copy()
+            df['Status'] = 'Active'  # Add Status column with default value
+            df['Department'] = file_path.split()[0].lower()
+            df['unique_id'] = [f"row_{i}" for i in range(len(df))]
+            df.set_index('unique_id', inplace=True, drop=False)
+            
+            dfs.append(df)
+        except FileNotFoundError:
+            print(f"Error: File {file_path} not found")
+        except pd.errors.EmptyDataError:
+            print(f"Error: File {file_path} is empty")
+        except pd.errors.ParserError as e:
+            print(f"Error parsing file {file_path}: {str(e)}")
     
-    combined_df = pd.concat(dfs, ignore_index=True)
-    combined_df['unique_id'] = [f"row_{i}" for i in range(len(combined_df))]
-    combined_df.set_index('unique_id', inplace=True, drop=False)
-    
-    return combined_df
-    
+    if not dfs:
+        print("No valid data files found")
+        return pd.DataFrame()
+        
+    return pd.concat(dfs, ignore_index=True)
 
 # Sub-department mapping
 SUB_DEPT_MAPPING = {
@@ -89,7 +107,8 @@ def deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_da
         'Delivery Date': delivery_date,
         'Received By': current_user['username'],
         'barcode_data': barcode_info['barcode_data'] if barcode_info else None,
-        'barcode_image': barcode_info['barcode_image'] if barcode_info else None
+        'barcode_image': barcode_info['barcode_image'] if barcode_info else None,
+        'Status': 'Active'
     }
     
     add_received_product(product_dict, auth_system)
@@ -140,7 +159,7 @@ def process_product(product, auth_system):
         return None
         
     # Update product status and details
-    product['Status'] = 'Processed'
+    product['Status'] = 'Processed'  # This will be used by update_product_in_database
     product['Processing Date'] = processing_date
     product['Processed By'] = current_user['username']
     product['Current Location'] = f"{product['Department']} Processing"
@@ -162,6 +181,9 @@ def process_product(product, auth_system):
         product['Temperature Log'] = []
     product['Temperature Log'].append(f"{processing_date}: {temp_reading}")
     
+    # Update the product in the database
+    update_product_in_database(product)
+    
     return product
 
 # Barcode generation
@@ -176,11 +198,12 @@ def generate_barcode(data):
 def generate_product_barcode(product_code, batch_no, sell_by_date):
     """Generate a barcode for a product using Code128 format."""
     try:
-        # Create a unique identifier combining product info
-        barcode_data = f"{product_code}|{batch_no}|{sell_by_date}"
+        # Add timestamp to create a unique identifier
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        combined_batch = f"{product_code}-{batch_no}-{timestamp}"
         
         # Generate the barcode in memory
-        code128 = Code128(barcode_data, writer=ImageWriter())
+        code128 = Code128(combined_batch, writer=ImageWriter())
         
         # Save barcode to BytesIO buffer
         buffer = io.BytesIO()
@@ -190,7 +213,7 @@ def generate_product_barcode(product_code, batch_no, sell_by_date):
         barcode_image = base64.b64encode(buffer.getvalue()).decode()
         
         return {
-            'barcode_data': barcode_data,
+            'barcode_data': combined_batch,
             'barcode_image': barcode_image
         }
     except Exception as e:
@@ -233,7 +256,7 @@ def add_product_to_inventory(values, auth_system):
             values['-SELL_BY_DATE-'],
             datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             current_user['username'],
-            'active',
+            'Active',
             current_user['department'],
             f"Product added by {current_user['username']} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             barcode_info['barcode_data'],
@@ -369,7 +392,7 @@ def create_gui(df):
                  sg.Tab('Receiving', create_receiving_tab()),
                  sg.Tab('Recipes', create_recipes_tab()),
                  sg.Tab('Reports', create_reports_tab()),
-                 sg.Tab('Database Management', create_database_management_tab(), visible=auth_system.is_manager())]
+                 create_database_management_tab()]
             ], key='-TABGROUP-', expand_x=True, expand_y=True)],
             [sg.Button('Logout', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary'])),
              sg.Button('Exit', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']))]
@@ -432,7 +455,7 @@ def create_product_management_tab(df, departments):
             [sg.Text('Supplier Batch', size=(15, 1)), sg.Input(key='-SUPPLIER_BATCH-', size=(20, 1))],
             [sg.Text('Sell by Date', size=(15, 1)),
              sg.Input(key='-SELL_BY_DATE-', size=(10, 1), default_text=datetime.now().strftime('%Y-%m-%d')),
-             sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['secondary']))],
+             sg.CalendarButton('Select Date', target='-SELL_BY_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
             [sg.Button('Receive Product', size=(15, 1), button_color=(COLORS['text'], COLORS['primary']))],
         ], relief=sg.RELIEF_SUNKEN, expand_x=True, expand_y=True)],
         department_frames
@@ -445,7 +468,7 @@ def create_receiving_tab():
             [sg.Text('Active Products', font=FONT_SUBHEADER)],
             [sg.Table(values=[],
                      headings=['Product Code', 'Description', 'Quantity', 'Unit', 
-                              'Supplier Batch', 'Sell By Date', 'Received Date', 'Received By'],
+                              'Supplier Batch No', 'Sell By Date', 'Received Date', 'Received By'],
                      auto_size_columns=True,
                      display_row_numbers=False,
                      justification='left',
@@ -454,8 +477,8 @@ def create_receiving_tab():
                      enable_events=True)],
             [sg.Button('View Details', button_color=(COLORS['text'], COLORS['primary'])),
              sg.Button('Process Selected', button_color=(COLORS['text'], COLORS['primary'])),
-             sg.Button('Generate Barcode', button_color=(COLORS['text'], COLORS['primary'])),
-             sg.Button('Refresh', button_color=(COLORS['text'], COLORS['secondary']))]
+             sg.Button('Refresh', button_color=(COLORS['text'], COLORS['secondary'])),
+             sg.Button('Delete All', button_color=(COLORS['text'], COLORS['secondary']))]
         ], vertical_alignment='top'),
         sg.Column([
             [sg.Text('Processed Products', font=FONT_SUBHEADER)],
@@ -468,8 +491,7 @@ def create_receiving_tab():
                      num_rows=15,
                      key='-PROCESSED_TABLE-',
                      enable_events=True)],
-            [sg.Button('View Processed Details', button_color=(COLORS['text'], COLORS['primary'])),
-             sg.Button('View History', button_color=(COLORS['text'], COLORS['primary']))]
+            [sg.Button('View Processed Details', button_color=(COLORS['text'], COLORS['primary']))]
         ], vertical_alignment='top')]
     ]
     return layout  # Return just the layout instead of wrapping it in a Tab
@@ -599,7 +621,11 @@ def update_department_tables(window, inventory):
     for dept in departments:
         dept_inventory = [item for item in inventory if item['Department'].lower() == dept.lower()]
         window[f'-{dept.upper()}_TABLE-'].update([
-            [item['Product Code'], item['Product Description'], item['Quantity'], item['Unit'], item['Status']]
+            [item['Product Code'],
+             item['Product Description'],
+             item['Quantity'],
+             item['Unit'],
+             item['Status']]
             for item in dept_inventory
         ])
 
@@ -612,8 +638,14 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not selected_rows:
             sg.popup('Please select a product to view details', font=FONT_NORMAL)
             return
-        # Use the stored active_items to get the correct product
-        selected_product = window.active_items[selected_rows[0]]
+        
+        # Get active items from inventory
+        active_items = [item for item in inventory if item.get('Status') == 'Active']
+        if not active_items or selected_rows[0] >= len(active_items):
+            sg.popup('Selected product not found', font=FONT_NORMAL)
+            return
+            
+        selected_product = active_items[selected_rows[0]]
         show_product_details(selected_product, auth_system)
     
     elif event == 'View Processed Details':
@@ -621,57 +653,69 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
         if not selected_rows:
             sg.popup('Please select a processed product to view details', font=FONT_NORMAL)
             return
-        # Use the stored processed_items to get the correct product
-        selected_product = window.processed_items[selected_rows[0]]
-        show_product_details(selected_product, auth_system)
-    
-    elif event == 'View History':
-        selected_rows = values['-PROCESSED_TABLE-']
-        if not selected_rows:
-            sg.popup('Please select a product to view history', font=FONT_NORMAL)
+            
+        # Get processed items from inventory
+        processed_items = [item for item in inventory if item.get('Status') == 'Processed']
+        if not processed_items or selected_rows[0] >= len(processed_items):
+            sg.popup('Selected processed product not found', font=FONT_NORMAL)
             return
-        # Use the stored processed_items to get the correct product
-        selected_product = window.processed_items[selected_rows[0]]
-        layout = [
-            [sg.Text('Product History', font=FONT_HEADER)],
-            [sg.Text(f"Product: {selected_product['Product Description']}")],
-            [sg.Text('Handling History:')],
-            [sg.Multiline(selected_product.get('Handling History', 'No handling history available'), size=(60, 10), disabled=True)],
-            [sg.Text('Temperature Log:')],
-            [sg.Multiline('\n'.join(selected_product.get('Temperature Log', ['No temperature log available'])), size=(60, 5), disabled=True)],
-            [sg.Button('Close')]
-        ]
-        history_window = sg.Window('Product History', layout, modal=True)
-        while True:
-            hist_event, _ = history_window.read()
-            if hist_event in (sg.WIN_CLOSED, 'Close'):
-                break
-        history_window.close()
+            
+        selected_product = processed_items[selected_rows[0]]
+        show_product_details(selected_product, auth_system)
     
     elif event == 'Process Selected':
         selected_rows = values['-RECEIVING_TABLE-']
         if not selected_rows:
             sg.popup('Please select products to process', font=FONT_NORMAL)
             return
+            
         user_info = auth_system.get_current_user_info()
         if not user_info or user_info['role'] != 'Manager':
             sg.popup_error('You are not authorized to process products. Only Managers can process products.', font=FONT_NORMAL)
-        else:
-            # Use the stored active_items to get the correct products
-            selected_products = [window.active_items[row] for row in selected_rows]
-            process_selected_products(auth_system, inventory, selected_products, window)
-            # Update both tables after processing
-            update_inventory_table(window, inventory)
-            update_processed_table(window, inventory)
-    
-    elif event == 'Generate Barcode':
-        selected_rows = values['-RECEIVING_TABLE-']
-        if not selected_rows:
-            sg.popup('Please select a product to generate barcode', font=FONT_NORMAL)
             return
-        # Use the stored active_items to get the correct product
-        selected_product = window.active_items[selected_rows[0]]
-        generate_and_show_barcode(selected_product)
+            
+        # Get active items from inventory
+        active_items = [item for item in inventory if item.get('Status') == 'Active']
+        if not active_items:
+            sg.popup('No active products found', font=FONT_NORMAL)
+            return
+            
+        selected_products = [active_items[row] for row in selected_rows if row < len(active_items)]
+        if not selected_products:
+            sg.popup('Selected products not found', font=FONT_NORMAL)
+            return
+            
+        process_selected_products(auth_system, inventory, selected_products, window)
+        # Update both tables after processing
+        update_inventory_table(window, inventory)
+        update_processed_table(window, inventory)
+    
+    elif event == 'Delete All':
+        # Get current user's info to check login status and role
+        current_user = auth_system.get_current_user_info()
+        if current_user is None:
+            sg.popup_error('Access Denied', 'Please log in to delete products.', font=FONT_NORMAL)
+            return
+            
+        if current_user['role'] != 'Manager':
+            sg.popup_error('Access Denied', 'Only Managers can delete all products.', font=FONT_NORMAL)
+            return
+        
+        # Show a confirmation dialog before deleting
+        if sg.popup_yes_no(
+            'Confirm Delete All', 
+            'This will delete ALL active products from the database.\n'
+            'This action cannot be undone.\n\n'
+            'Do you want to continue?',
+            font=FONT_NORMAL
+        ) == 'Yes':
+            success, message = delete_all_active_products()
+            if success:
+                sg.popup('Success', message, font=FONT_NORMAL)
+                # Refresh the display after deletion
+                refresh_display(window, inventory, auth_system)
+            else:
+                sg.popup_error('Error', message, font=FONT_NORMAL)
     
     elif event == 'Refresh':
         # Get current user's info to check login status
@@ -688,37 +732,41 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
             'Do you want to continue?',
             font=FONT_NORMAL
         ) == 'Yes':
-            if refresh_display(window, inventory, auth_system):
-                sg.popup('Success', 'Data refreshed successfully.', font=FONT_NORMAL)
-            else:
-                sg.popup_error('Error', 'Failed to refresh data. Please try again.')
+            refresh_display(window, inventory, auth_system)
 
 def department_login_window(auth_system, inventory, selected_rows, main_window):
+    """Show department login window for processing products."""
     layout = [
-        [sg.Text('Department Manager Login', font=FONT_SUBHEADER)],
-        [sg.Text('Username:', size=(15, 1)), sg.Input(key='-USERNAME-')],
-        [sg.Text('Password:', size=(15, 1)), sg.Input(key='-PASSWORD-', password_char='*')],
-        [sg.Button('Login', size=(10, 1), button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Cancel', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']))]
+        [sg.Text('Department Manager Login', font=FONT_HEADER)],
+        [sg.Text('Please log in to process products', font=FONT_NORMAL)],
+        [sg.Text('Username:', size=(15, 1), font=FONT_NORMAL), 
+         sg.Input(key='-USERNAME-', font=FONT_NORMAL)],
+        [sg.Text('Password:', size=(15, 1), font=FONT_NORMAL), 
+         sg.Input(key='-PASSWORD-', password_char='*', font=FONT_NORMAL)],
+        [sg.Button('Login', size=(10, 1), button_color=(COLORS['text'], COLORS['primary']), font=FONT_NORMAL),
+         sg.Button('Cancel', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']), font=FONT_NORMAL)]
     ]
-    window = sg.Window('Department Manager Login', layout)
+    
+    window = sg.Window('Department Manager Login', layout, finalize=True)
 
     while True:
         event, values = window.read()
         if event in (sg.WIN_CLOSED, 'Cancel'):
-            break
+            window.close()
+            return False
+            
         if event == 'Login':
             username = values['-USERNAME-']
             password = values['-PASSWORD-']
+            
             if auth_system.login(username, password):
                 window.close()
-                process_selected_products(auth_system, inventory, selected_rows, main_window)
-                auth_system.logout()
-                return
+                return True
             else:
-                sg.popup_error('Login failed. Please try again.')
-
+                sg.popup_error('Invalid username or password', font=FONT_NORMAL)
+                
     window.close()
+    return False
 
 def process_selected_products(auth_system, inventory, selected_products, window):
     """
@@ -783,7 +831,7 @@ def update_product_in_database(product):
         UPDATE received_products
         SET status = ?,
             handling_history = ?
-        WHERE product_code = ? AND supplier_batch = ?
+        WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
     ''', (
         product['Status'],
         handling_history,
@@ -797,7 +845,7 @@ def update_product_in_database(product):
             UPDATE received_products
             SET processed_by = ?,
                 processing_date = ?
-            WHERE product_code = ? AND supplier_batch = ?
+            WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
         ''', (
             product['Processed By'],
             product['Processing Date'],
@@ -1095,43 +1143,41 @@ def update_product_fields(window, product):
 
 def update_inventory_table(window, inventory):
     """Update the inventory table with active (unprocessed) items."""
-    # Filter active (unprocessed) items and store them as a class attribute
-    window.active_items = [item for item in inventory if item['Status'] != 'Processed']
+    # Filter for active items only
+    active_items = [item for item in inventory if item.get('Status') == 'Active']
     
-    # Format active items for display
-    active_data = [[
-        item['Product Code'],
-        item['Product Description'],
-        item['Quantity'],
-        item['Unit'],
-        item['Supplier Batch No'],
-        item['Sell By Date'],
-        item.get('Received Date', ''),  # Changed from 'Delivery Date' to 'Received Date'
-        item.get('Received By', '')
-    ] for item in window.active_items]
-    
-    # Get currently displayed data
-    current_data = window['-RECEIVING_TABLE-'].get()
-    
-    # Only update if there are actual changes in the data
-    if current_data != active_data:
-        window['-RECEIVING_TABLE-'].update(active_data)
+    # Update table with active items
+    try:
+        window['-RECEIVING_TABLE-'].update(values=[
+            [item['Product Code'],
+             item['Product Description'],
+             item['Quantity'],
+             item['Unit'],
+             item.get('Supplier Batch No', ''),
+             item.get('Sell By Date', ''),
+             item.get('Delivery Date', ''),
+             item.get('Received By', '')] for item in active_items
+        ])
+    except (KeyError, AttributeError) as e:
+        print(f"Error updating inventory table: {e}")
+        pass
 
 def update_processed_table(window, inventory):
     """Update the processed items table."""
-    # Store processed items as a class attribute
-    window.processed_items = [item for item in inventory if item['Status'] == 'Processed']
+    # Filter for processed items only
+    processed_items = [item for item in inventory if item.get('Status') == 'Processed']
     
-    processed_data = [[
-        item['Product Code'],
-        item['Product Description'],
-        item['Quantity'],
-        item['Unit'],
-        item.get('Processing Date', 'N/A'),
-        item.get('Processed By', 'N/A'),
-        item.get('Temperature Log', [])[-1] if item.get('Temperature Log') else 'N/A',
-        item['Status']
-    ] for item in window.processed_items]
+    # Update table with processed items
+    processed_data = [
+        [item['Product Code'], 
+         item['Product Description'], 
+         item['Quantity'], 
+         item['Unit'],
+         item.get('Supplier Batch No', ''),
+         item.get('Sell By Date', ''),
+         item.get('Processing Date', ''),
+         item.get('Processed By', '')] for item in processed_items
+    ]
     
     # Get currently displayed data
     current_data = window['-PROCESSED_TABLE-'].get()
@@ -1180,105 +1226,195 @@ def refresh_display(window, inventory, auth_system):
     return True
 
 def show_login_window(auth_system):
+    """Show login window and handle authentication."""
     layout = [
-        [sg.Text('Username:', size=(15, 1)), sg.Input(key='-USERNAME-')],
-        [sg.Text('Password:', size=(15, 1)), sg.Input(key='-PASSWORD-', password_char='*')],
-        [sg.Button('Login', button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Exit', button_color=(COLORS['text'], COLORS['secondary']))]
+        [sg.Text('Login', font=FONT_HEADER)],
+        [sg.Text('Please log in to continue', font=FONT_NORMAL)],
+        [sg.Text('Username:', size=(15, 1), font=FONT_NORMAL), 
+         sg.Input(key='-USERNAME-', font=FONT_NORMAL)],
+        [sg.Text('Password:', size=(15, 1), font=FONT_NORMAL), 
+         sg.Input(key='-PASSWORD-', password_char='*', font=FONT_NORMAL)],
+        [sg.Button('Login', size=(10, 1), button_color=(COLORS['text'], COLORS['primary']), font=FONT_NORMAL),
+         sg.Button('Exit', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']), font=FONT_NORMAL)]
     ]
-    window = sg.Window('Login', layout)
+    
+    window = sg.Window('Login', layout, finalize=True)
 
     while True:
         event, values = window.read()
         if event in (sg.WIN_CLOSED, 'Exit'):
             window.close()
             return False
+            
         if event == 'Login':
-            if auth_system.login(values['-USERNAME-'], values['-PASSWORD-']):
-                sg.popup('Login successful!')
+            username = values['-USERNAME-']
+            password = values['-PASSWORD-']
+            
+            if auth_system.login(username, password):
                 window.close()
                 return True
             else:
-                sg.popup_error('Login failed. Please try again.')
-    
-        window.close()
-        return False
+                sg.popup_error('Invalid username or password', font=FONT_NORMAL)
+                
+    window.close()
+    return False
 
 def record_temperature_popup():
+    """Show temperature recording popup window."""
     locations = [
         'Receiving', 'Hot Foods', 'Butchery', 'Bakery', 'Fruit & Veg',
         'Admin', 'Coffee shop', 'Floor', 'Location 9', 'Location 10', 'Location 11'
     ]
     
     layout = [
-        [sg.Text('Record Temperature', font=FONT_NORMAL)],
-        [sg.Text('Temperature:', font=FONT_NORMAL), sg.Input(key='-TEMP-', font=FONT_NORMAL)],
-        [sg.Text('Location:', font=FONT_NORMAL), 
-         sg.Combo(locations, default_value=locations[0], key='-LOCATION-', font=FONT_NORMAL, readonly=True)],
+        [sg.Text('Record Temperature', font=FONT_HEADER)],
+        [sg.Text('Temperature (°C):', font=FONT_NORMAL), 
+         sg.Input(key='-TEMP-', size=(10, 1), font=FONT_NORMAL)],
+        [sg.Text('Location:', font=FONT_NORMAL),
+         sg.Combo(locations, default_value=locations[0], key='-LOCATION-', 
+                 font=FONT_NORMAL, readonly=True)],
         [sg.Button('Submit', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['primary'])),
          sg.Button('Cancel', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['secondary']))]
     ]
     
-    window = sg.Window('Record Temperature', layout)
-    
+    window = sg.Window('Record Temperature', layout, finalize=True)
+
     while True:
         event, values = window.read()
         if event in (sg.WIN_CLOSED, 'Cancel'):
             window.close()
             return None
+            
         if event == 'Submit':
             try:
                 temp = float(values['-TEMP-'])
-                location = values['-LOCATION-']
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                window.close()
-                return f"{timestamp}: {temp}°C at {location}"
+                if -50 <= temp <= 100:  # Reasonable temperature range
+                    window.close()
+                    return {
+                        'temperature': temp,
+                        'location': values['-LOCATION-'],
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                else:
+                    sg.popup_error('Please enter a valid temperature between -50°C and 100°C', 
+                                 font=FONT_NORMAL)
             except ValueError:
-                sg.popup_error('Please enter a valid temperature', font=FONT_NORMAL)
-    
-        window.close()
+                sg.popup_error('Please enter a valid number for temperature', 
+                             font=FONT_NORMAL)
+                
+    window.close()
+    return None
 
 def generate_and_show_barcode(item):
-    # Create a combined identifier with timestamp for better traceability
+    """Generate and display a barcode for the given item."""
+    # Create a combined identifier combining product info
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     combined_batch = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
-    barcode_image = generate_barcode(combined_batch)
     
-    bio = io.BytesIO()
-    barcode_image.save(bio, format="PNG")
-    barcode_data = bio.getvalue()
-    
-    # Format timestamp for display
-    display_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    layout = [
-        [sg.Text(item['Product Description'], font=FONT_NORMAL)],
-        [sg.Text(f"Product Code: {item['Product Code']}")],
-        [sg.Text(f"Batch: {item['Supplier Batch No']}")],
-        [sg.Text(f"Generated: {display_timestamp}", font=FONT_NORMAL)],
-        [sg.Text(f"Tracking ID: {combined_batch}", font=FONT_NORMAL)],
-        [sg.Image(data=barcode_data, key='-IMAGE-')],
-        [sg.Button('Save Barcode', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['primary'])),
-         sg.Button('Close', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['secondary']))]
-    ]
-    
-    window = sg.Window('Barcode', layout)
-    while True:
-        event, values = window.read()
-        if event in (sg.WIN_CLOSED, 'Close'):
-            break
-        elif event == 'Save Barcode':
-            save_barcode(barcode_image, item)
-            sg.popup('Barcode saved successfully!', font=FONT_NORMAL)
-    window.close()
+    try:
+        # Generate barcode image
+        barcode_data = generate_barcode(combined_batch)
+        if not barcode_data:
+            sg.popup_error('Failed to generate barcode', font=FONT_NORMAL)
+            return None
+            
+        # Create window layout
+        layout = [
+            [sg.Text('Generated Barcode', font=FONT_HEADER)],
+            [sg.Text(f"Product: {item['Product Description']}", font=FONT_NORMAL)],
+            [sg.Text(f"Code: {item['Product Code']}", font=FONT_NORMAL)],
+            [sg.Text(f"Batch: {item['Supplier Batch No']}", font=FONT_NORMAL)],
+            [sg.Image(data=barcode_data, key='-IMAGE-')],
+            [sg.Button('Save Barcode', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Close', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['secondary']))]
+        ]
+        
+        window = sg.Window('Barcode', layout, finalize=True)
+        
+        while True:
+            event, values = window.read()
+            if event in (sg.WIN_CLOSED, 'Close'):
+                window.close()
+                return None
+                
+            if event == 'Save Barcode':
+                save_path = sg.popup_get_file(
+                    'Save Barcode As...', 
+                    save_as=True, 
+                    default_extension='.png',
+                    file_types=(('PNG Files', '*.png'),),
+                    font=FONT_NORMAL
+                )
+                if save_path:
+                    try:
+                        save_barcode(barcode_data, item)
+                        sg.popup('Barcode saved successfully!', font=FONT_NORMAL)
+                    except Exception as e:
+                        sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
+                        
+        window.close()
+        return None
+        
+    except Exception as e:
+        sg.popup_error(f'Error generating barcode: {str(e)}', font=FONT_NORMAL)
+        return None
 
-def save_barcode(image, item):
-    filename = sg.popup_get_file('Save Barcode as PNG', save_as=True, file_types=(("PNG Files", "*.png"),))
-    if filename:
-        if not filename.lower().endswith('.png'):
-            filename += '.png'
-        image.save(filename)
-        sg.popup(f"Barcode saved as {filename}")
+def save_barcode(barcode_data, item):
+    """Save the barcode image and update the database with barcode information."""
+    try:
+        # Generate a unique filename based on item details
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        default_filename = f"barcode_{item['Product Code']}_{timestamp}.png"
+        
+        # Get save location from user
+        save_path = sg.popup_get_file(
+            'Save Barcode As...', 
+            save_as=True,
+            default_extension='.png',
+            default_path=default_filename,
+            file_types=(('PNG Files', '*.png'),),
+            font=FONT_NORMAL
+        )
+        
+        if not save_path:
+            return False
+            
+        # Ensure .png extension
+        if not save_path.lower().endswith('.png'):
+            save_path += '.png'
+            
+        # Save the barcode image
+        with open(save_path, 'wb') as f:
+            f.write(barcode_data)
+            
+        # Convert barcode data to base64 for database storage
+        barcode_base64 = base64.b64encode(barcode_data).decode()
+        
+        # Generate tracking ID
+        tracking_id = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
+        
+        # Update database
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE received_products 
+            SET barcode_data = ?, barcode_image = ?
+            WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
+        ''', (tracking_id, barcode_base64, item['Product Code'], item['Supplier Batch No']))
+        
+        conn.commit()
+        conn.close()
+        
+        # Update the item dictionary
+        item['barcode_data'] = tracking_id
+        item['barcode_image'] = barcode_base64
+        
+        return True
+        
+    except Exception as e:
+        sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
+        return False
 
 def save_as_pdf(report, filename):
     pdf = FPDF()
@@ -1296,15 +1432,14 @@ def save_as_pdf(report, filename):
 
 def save_as_csv(report, filename):
     with open(filename, 'w', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=report[0].keys())
-        writer.writeheader()
+        writer = csv.writer(file)
+        writer.writerow(['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'])
         writer.writerows(report)
 
 def initialize_database():
     conn = sqlite3.connect('spatrac.db')
     cursor = conn.cursor()
     
-    # Create received products table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS received_products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1314,10 +1449,10 @@ def initialize_database():
             unit TEXT,
             department TEXT,
             received_by TEXT,
-            received_date DATETIME,
+            received_date TEXT,
             supplier_batch TEXT,
             sell_by_date TEXT,
-            status TEXT DEFAULT 'active',
+            status TEXT DEFAULT 'Active',
             handling_history TEXT DEFAULT '',
             temperature_log TEXT DEFAULT '',
             processed_by TEXT,
@@ -1332,6 +1467,7 @@ def initialize_database():
     columns = [info[1] for info in cursor.fetchall()]
     
     required_columns = {
+        'status': 'TEXT DEFAULT "Active"',
         'handling_history': 'TEXT DEFAULT ""',
         'temperature_log': 'TEXT DEFAULT ""',
         'processed_by': 'TEXT',
@@ -1356,18 +1492,19 @@ def add_received_product(product, auth_system):
     cursor.execute('''
         INSERT INTO received_products 
         (product_code, description, quantity, unit, department, received_by, 
-         received_date, supplier_batch, sell_by_date, barcode_data, barcode_image)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         received_date, supplier_batch, sell_by_date, status, barcode_data, barcode_image)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         product['Product Code'],
-        product['Product Description'],  # Changed from Description
+        product['Product Description'],
         product['Quantity'],
         product['Unit'],
         current_user['department'],
         current_user['username'],
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        product.get('Supplier Batch No', ''),  # Changed from Supplier Batch
-        product.get('Sell By Date', ''),
+        product['Supplier Batch No'],  # Changed from 'Supplier Batch' to 'Supplier Batch No'
+        product['Sell By Date'],
+        'Active',
         product.get('barcode_data', ''),
         product.get('barcode_image', '')
     ))
@@ -1383,9 +1520,11 @@ def get_department_inventory(department):
         SELECT product_code, description, quantity, unit, supplier_batch, 
                sell_by_date, received_date, received_by, status, department,
                COALESCE(handling_history, '') as handling_history,
-               COALESCE(temperature_log, '') as temperature_log
+               COALESCE(temperature_log, '') as temperature_log,
+               COALESCE(barcode_data, '') as barcode_data,
+               COALESCE(barcode_image, '') as barcode_image
         FROM received_products
-        WHERE department = ? AND status = 'active'
+        WHERE department = ? AND status = 'Active'
         ORDER BY received_date DESC
     ''', (department,))
     
@@ -1410,19 +1549,39 @@ def get_department_inventory(department):
         item['Handling History'] = item.pop('handling_history', '')
         item['Temperature Log'] = item.pop('temperature_log', '').split('\n') if item.get('temperature_log') else []
         
-        # Extract barcode information from handling history
-        if item['Handling History']:
-            history_lines = item['Handling History'].split('\n')
-            for line in history_lines:
-                if line.startswith('Barcode Generated:'):
-                    item['barcode_data'] = line.replace('Barcode Generated:', '').strip()
-                elif line.startswith('Barcode Path:'):
-                    item['barcode_path'] = line.replace('Barcode Path:', '').strip()
+        # Add barcode data if available
+        barcode_data = item.pop('barcode_data', '')
+        barcode_image = item.pop('barcode_image', '')
+        if barcode_data:
+            item['barcode_data'] = barcode_data
+        if barcode_image:
+            item['barcode_image'] = barcode_image
         
         inventory.append(item)
     
     conn.close()
     return inventory
+
+def update_inventory_table(window, inventory):
+    """Update the inventory table with active (unprocessed) items."""
+    # Filter for active items only
+    active_items = [item for item in inventory if item.get('Status') == 'Active']
+    
+    # Update table with active items
+    try:
+        window['-RECEIVING_TABLE-'].update(values=[
+            [item['Product Code'],
+             item['Product Description'],
+             item['Quantity'],
+             item['Unit'],
+             item.get('Supplier Batch No', ''),
+             item.get('Sell By Date', ''),
+             item.get('Delivery Date', ''),
+             item.get('Received By', '')] for item in active_items
+        ])
+    except (KeyError, AttributeError) as e:
+        print(f"Error updating inventory table: {e}")
+        pass
 
 def create_database_management_tab():
     today = datetime.now()
@@ -1452,16 +1611,16 @@ def create_database_management_tab():
                 justification='left',
                 num_rows=10,
                 key='-DB-TABLE-',
-                enable_events=True
-            )]
+                enable_events=True)
+            ]
         ])],
-        [sg.Frame('Export Options', [
-            [sg.Button('Export to CSV', key='-DB-EXPORT-CSV-', button_color=(COLORS['text'], COLORS['secondary'])),
-             sg.Button('Export to PDF', key='-DB-EXPORT-PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
-             sg.Button('View Details', key='-DB-VIEW-DETAILS-', button_color=(COLORS['text'], COLORS['primary']))]
-        ])]
+        [sg.Frame('Actions', [
+            [sg.Button('Export to CSV', key='-DB-EXPORT-CSV-', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Export to PDF', key='-DB-EXPORT-PDF-', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('View Details', key='-DB-VIEW-DETAILS-', button_color=(COLORS['text'], COLORS['primary'])),
+             sg.Button('Delete All Active Products', key='-DB-DELETE-ALL-', button_color=(COLORS['text'], COLORS['danger']))]])],
     ]
-    return layout
+    return sg.Tab('Database Management', layout, key='-DATABASE-TAB-')
 
 def handle_database_management_events(event, values, window, inventory, auth_system):
     if not auth_system.is_manager():
@@ -1529,7 +1688,9 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
         if not window['-DB-TABLE-'].get():
             sg.popup_error('No Data', 'Please perform a search first.')
             return
-        filename = sg.popup_get_file('Save CSV As', save_as=True, file_types=(("CSV Files", "*.csv"),))
+        filename = sg.popup_get_file('Save CSV As', save_as=True, 
+                                       file_types=(("CSV Files", "*.csv"),),
+                                       default_extension='.csv')
         if filename:
             try:
                 with open(filename, 'w', newline='') as f:
@@ -1544,7 +1705,9 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
         if not window['-DB-TABLE-'].get():
             sg.popup_error('No Data', 'Please perform a search first.')
             return
-        filename = sg.popup_get_file('Save PDF As', save_as=True, file_types=(("PDF Files", "*.pdf"),))
+        filename = sg.popup_get_file('Save PDF As', save_as=True, 
+                                       file_types=(("PDF Files", "*.pdf"),),
+                                       default_extension='.pdf')
         if filename:
             try:
                 pdf = FPDF()
@@ -1578,7 +1741,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                 
                 # Save the PDF
                 pdf.output(filename)
-                sg.popup('Success', f"Report saved as {filename}")
+                sg.popup('Report saved successfully!', title='Success')
                 
             except Exception as e:
                 sg.popup_error('Export Error', f'Error saving PDF: {str(e)}')
@@ -1626,74 +1789,6 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
         except Exception as e:
             sg.popup_error('Error', f'An error occurred while viewing details: {str(e)}')
 
-def show_database_product_details(product, auth_system):
-    # Format dates for display
-    received_date = product.get('received_date', 'N/A')
-    processing_date = product.get('processing_date', 'N/A')
-    
-    # Format handling history for display
-    handling_history = product.get('handling_history', [])
-    if isinstance(handling_history, str):
-        handling_history = handling_history.split('\n')
-    history_text = '\n'.join(handling_history) if handling_history else 'No handling history'
-    
-    layout = [
-        [sg.Text('Product Details', font=FONT_HEADER)],
-        [sg.Text(f"Product Code: {product.get('product_code', 'N/A')}")],
-        [sg.Text(f"Description: {product.get('description', 'N/A')}")],
-        [sg.Text(f"Current Department: {product.get('department', 'N/A')}")],
-        [sg.Text(f"Quantity: {product.get('quantity', 'N/A')} {product.get('unit', '')}")],
-        [sg.Text(f"Status: {product.get('status', 'N/A')}")],
-        [sg.Text(f"Supplier Batch: {product.get('supplier_batch', 'N/A')}")],
-        [sg.Text(f"Received Date: {received_date}")],
-        [sg.Text(f"Received By: {product.get('received_by', 'N/A')}")],
-    ]
-    
-    # Add barcode section if available
-    if product.get('barcode_data'):
-        layout.extend([
-            [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
-        ])
-        if product.get('barcode_image'):
-            layout.append([sg.Image(product['barcode_image'], size=(300, 100))])
-    
-    # Add processing information if available
-    if product.get('processed_by'):
-        layout.extend([
-            [sg.Text('Processing Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Processed By: {product['processed_by']}")],
-            [sg.Text(f"Processing Date: {processing_date}")],
-        ])
-    
-    layout.extend([
-        [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline(history_text, size=(60, 5), disabled=True)],
-        [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline('\n'.join(product.get('temperature_log', ['No temperature log available'])), size=(60, 3), disabled=True)],
-        [sg.Button('Close')]
-    ])
-    
-    details_window = sg.Window('Product Details', layout, modal=True, finalize=True)
-    
-    # Center the window on screen
-    details_window.move(details_window.current_location()[0], 0)
-    
-    while True:
-        event, _ = details_window.read()
-        if event in (sg.WIN_CLOSED, 'Close'):
-            break
-    
-    details_window.close()
-    
-    # Clean up temporary barcode image file
-    if product.get('barcode_image'):
-        try:
-            import os
-            os.unlink(product['barcode_image'])
-        except:
-            pass
-
 def load_final_products(department):
     """Load final products for a specific department."""
     try:
@@ -1714,8 +1809,8 @@ def create_reports_tab():
             [sg.Text('Date Range:')],
             [sg.Text('From:'), 
              sg.Input(key='-START_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Choose', target='-START_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary'])),
-             sg.Text('To:'), 
+             sg.CalendarButton('Choose', target='-START_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
+            [sg.Text('To:'), 
              sg.Input(key='-END_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d')),
              sg.CalendarButton('Choose', target='-END_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
             [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary']))]
@@ -1745,7 +1840,7 @@ def save_report_as_pdf(filename, report_data, report_type, start_date, end_date,
         user_info = auth_system.get_current_user_info()
         pdf.set_font("Arial", "", 12)
         pdf.cell(0, 8, f"Department: {user_info['department']}", ln=True)
-        pdf.cell(0, 8, f"Generated by: {user_info['username']} ({user_info['role']})", ln=True)
+        pdf.cell(0, 8, f"Generated by: {user_info['username']} ({user_info['role']} - {user_info['department']}) - {user_info['department']}", ln=True)
         pdf.cell(0, 8, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
         pdf.cell(0, 8, f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}", ln=True)
         pdf.ln(10)
@@ -1946,57 +2041,48 @@ Generated by SPATRAC System
 
 def show_product_details(product, auth_system):
     """Display detailed product information including barcode."""
-    user_info = auth_system.get_current_user_info()
-    manager_info = f"Viewed by: {user_info['username']} ({user_info['role']} - {user_info['department']})" if user_info else "Viewed by: N/A"
-    
-    # Create temporary file for barcode image if available
+    if not product:
+        sg.popup_error('No product selected', font=FONT_NORMAL)
+        return
+        
+    # Convert barcode image from base64 if available
     barcode_image_path = None
     if product.get('barcode_image'):
         try:
-            import tempfile
-            from PIL import Image
-            import io
-            
-            # Convert base64 to image
-            image_data = base64.b64decode(product['barcode_image'])
-            image = Image.open(io.BytesIO(image_data))
-            
-            # Create temporary file
-            temp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-            image.save(temp.name, format='PNG')
-            temp.close()
-            barcode_image_path = temp.name
+            barcode_data = base64.b64decode(product['barcode_image'])
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                temp_file.write(barcode_data)
+                barcode_image_path = temp_file.name
         except Exception as e:
-            print(f"Error creating barcode image: {str(e)}")
-    
+            print(f"Error loading barcode image: {e}")
+            
+    # Create the layout
     layout = [
-        [sg.Text('Product Details', font=FONT_HEADER)],
-        [sg.Text(manager_info, font=FONT_SMALL)],
-        [sg.Text(f"Product Code: {product['Product Code']}")],
-        [sg.Text(f"Product Description: {product['Product Description']}")],
-        [sg.Text(f"Quantity: {product['Quantity']} {product['Unit']}")],
-        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
-        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
-        [sg.Text(f"Received Date: {product.get('Received Date', 'N/A')}")],
-        [sg.Text(f"Received By: {product.get('Received By', 'N/A')}")],
-        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
+        [sg.Text('Product Details', font=('Helvetica', 12, 'bold'))],
+        [sg.Text(f"Product Code: {product['Product Code']}", font=FONT_NORMAL)],
+        [sg.Text(f"Description: {product['Product Description']}", font=FONT_NORMAL)],
+        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}", font=FONT_NORMAL)],
+        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}", font=FONT_NORMAL)],
+        [sg.Text(f"Status: {product.get('Status', 'N/A')}", font=FONT_NORMAL)],
     ]
     
     # Add barcode section if available
     if product.get('barcode_data'):
         layout.extend([
             [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
+            [sg.Text(f"Barcode Data: {product['barcode_data']}", font=FONT_NORMAL)],
         ])
         if barcode_image_path:
             layout.append([sg.Image(barcode_image_path, size=(300, 100))])
     
     layout.extend([
         [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
+        [sg.Multiline(product.get('Handling History', 'No handling history available'), 
+                     size=(60, 5), disabled=True, font=FONT_NORMAL)],
         [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline('\n'.join(product.get('Temperature Log', ['No temperature readings available'])), size=(60, 3), disabled=True)],
-        [sg.Button('Close')]
+        [sg.Multiline(format_temperature_log(product.get('Temperature Log', [])), 
+                     size=(60, 3), disabled=True, font=FONT_NORMAL)],
+        [sg.Button('Close', font=FONT_NORMAL)]
     ])
     
     details_window = sg.Window('Product Details', layout, modal=True, finalize=True)
@@ -2007,17 +2093,30 @@ def show_product_details(product, auth_system):
     while True:
         event, _ = details_window.read()
         if event in (sg.WIN_CLOSED, 'Close'):
+            if barcode_image_path and os.path.exists(barcode_image_path):
+                try:
+                    os.unlink(barcode_image_path)
+                except Exception as e:
+                    print(f"Error removing temporary barcode file: {e}")
             break
-    
+            
     details_window.close()
-    
-    # Clean up temporary barcode image file
-    if barcode_image_path:
-        try:
-            import os
-            os.unlink(barcode_image_path)
-        except:
-            pass
+
+def format_temperature_log(temp_log):
+    """Format temperature log entries for display."""
+    if not temp_log or not isinstance(temp_log, list):
+        return 'No temperature readings available'
+        
+    formatted_entries = []
+    for entry in temp_log:
+        if isinstance(entry, dict):
+            formatted_entries.append(
+                f"{entry.get('timestamp', 'N/A')} - {entry.get('temperature', 'N/A')}°C at {entry.get('location', 'N/A')}"
+            )
+        else:
+            formatted_entries.append(str(entry))
+            
+    return '\n'.join(formatted_entries) if formatted_entries else 'No temperature readings available'
 
 def generate_inventory_summary(inventory, start_date, end_date, auth_system):
     """Generate an inventory summary report for the specified date range."""
@@ -2060,6 +2159,31 @@ def generate_traceability_report(inventory, start_date, end_date, auth_system):
         return filtered_inventory
     except Exception as e:
         raise Exception(f"Error generating traceability report: {str(e)}")
+
+def delete_all_active_products():
+    """Delete all active products from the database."""
+    try:
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        # Get count of active products before deletion
+        cursor.execute('SELECT COUNT(*) FROM received_products WHERE status = ?', ('Active',))
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            return False, "No active products found to delete"
+        
+        # Delete all products with 'Active' status
+        cursor.execute('DELETE FROM received_products WHERE status = ?', ('Active',))
+        
+        # Commit and close
+        conn.commit()
+        conn.close()
+        
+        return True, f"Successfully deleted {count} active products"
+    except Exception as e:
+        print(f"Error deleting active products: {str(e)}")
+        return False, f"Error deleting active products: {str(e)}"
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
