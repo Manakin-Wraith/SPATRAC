@@ -16,7 +16,7 @@
 * **Task 2:** Write functions to load product data from CSV into the Products table.
 * **Task 3:** Write functions to load recipe data from CSV into FinalProducts and FinalProductIngredients tables.
 * **Task 4:** Create the Login window UI (username, password, login/exit buttons).
-* **Task 5:** Create basic UI layouts for the Receiving window and one Department window (e.g., Butchery).  Don't implement functionality yet; focus on visual design.
+* **Task 5:** Create basic UI layouts for the Receiving window and one Department window (e.g., Butchery).
 
 **Sprint 2: Authentication and Receiving**
 

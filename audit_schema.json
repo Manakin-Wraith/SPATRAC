@@ -1,0 +1,7 @@
+{"traceability_report": {"product_name": "Product Name", "sell_by_date": "Date", 
+"food_handler_name": "Name", "packaging_batch_code": "Code", "department_manager_name": "Name", 
+"ingredients": [{"ingredient_name": "Name", "supplier_name": "Name", "supplier_address": "Address", 
+"batch_code": "Code", "receiving_date": "Date", "country_of_origin": "Country"}], 
+"packaging": {"supplier_name": "Name", "supplier_address": "Address", "packaging_type": "Type", 
+"date_received": "Date", "quantity_received": "1", "batch_code": "Code", "received_by": "Name", 
+"stock_quantity_issued": [{"issued_by": "Name", "issued_date": "Date", "quantity_issued": "1"}]}}}
