@@ -14,6 +14,8 @@ import barcode
 from barcode import Code128
 from barcode.writer import ImageWriter
 from auth_system import AuthSystem
+from database_updates import update_database_schema, migrate_existing_data
+from audit_ui import create_audit_tab, handle_audit_events
 
 # Constants
 FONT_HEADER = ('Helvetica', 24)
@@ -375,7 +377,8 @@ def create_gui(df):
                  sg.Tab('Receiving', create_receiving_tab()),
                  sg.Tab('Recipes', create_recipes_tab()),
                  sg.Tab('Reports', create_reports_tab()),
-                 create_database_management_tab()]
+                 create_database_management_tab(),
+                 create_audit_tab()]
             ], key='-TABGROUP-', expand_x=True, expand_y=True)],
             [sg.Button('Logout', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary'])),
              sg.Button('Exit', size=(10, 1), button_color=(COLORS['text'], COLORS['secondary']))]
@@ -399,6 +402,8 @@ def create_gui(df):
             handle_recipes_events(event, values, window, df)
             handle_reports_events(event, values, window, inventory, auth_system)  # Added auth_system
             handle_database_management_events(event, values, window, inventory, auth_system)
+            if event.startswith('-'):  # Audit-related events start with -
+                handle_audit_events(event, values, window, auth_system)
 
         window.close()
 
@@ -2202,7 +2207,8 @@ def delete_all_active_products():
         return False, f"Error deleting active products: {str(e)}"
 
 if __name__ == "__main__":
-    initialize_database()  # Initialize/update database schema
+    update_database_schema()  # Initialize/update database schema
+    migrate_existing_data()
     file_paths = ['Butchery reports Big G.csv', 'Bakery Big G.csv', 'HMR Big G.csv']
     df = load_data(file_paths)
     create_gui(df)
