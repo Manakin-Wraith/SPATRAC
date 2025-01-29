@@ -163,18 +163,14 @@ def migrate_existing_data():
                                 log['timestamp']
                             ))
                     except (SyntaxError, ValueError) as e:
-                        print(f"Error parsing temperature log for product {product[2]}: {str(e)}")
                         continue
 
             except sqlite3.IntegrityError as e:
-                print(f"Error migrating product {product[2]}: {str(e)}")
                 continue
 
         conn.commit()
-        print("Data migration completed successfully!")
 
     except Exception as e:
-        print(f"Error during migration: {str(e)}")
         conn.rollback()
     finally:
         conn.close()

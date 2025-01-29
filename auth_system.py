@@ -66,14 +66,10 @@ class AuthSystem:
     def handle_delivery(self):
         if self.current_user and self.is_delivery_manager():
             self.log.append(f"{time.ctime()}: {self.current_user.username} handled product delivery")
-        else:
-            print("Error: No user logged in or user is not a delivery manager")
 
     def process_product(self, department):
         if self.current_user and self.is_authorized(self.current_user.username, department):
             self.log.append(f"{time.ctime()}: {self.current_user.username} processed product for {department}")
-        else:
-            print(f"Error: User not authorized to process products for {department}")
 
     def print_log(self):
         for entry in self.log:
