@@ -1463,7 +1463,7 @@ def add_received_product(product, auth_system, window=None):
                 supplier_batch, sell_by_date, status,
                 received_date, received_by, handling_history,
                 temperature_log, department, processed_by, processing_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
