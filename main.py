@@ -5,10 +5,13 @@ from fpdf import FPDF
 from datetime import datetime
 import sqlite3
 import json
+import io
 from barcode import Code128
 from barcode.writer import ImageWriter
 from auth_system import AuthSystem
 import logging
+import base64
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -168,38 +171,39 @@ def process_product(product, auth_system):
     return product
 
 # Barcode generation
-# def generate_barcode(data):
-#     code128 = Code128(data, writer=ImageWriter())
-#     rv = io.BytesIO()
-#     code128.write(rv)
-#     image = Image.open(rv)
-#     image.thumbnail((300, 300))
-#     return image
+def generate_barcode(data):
+    code128 = Code128(data, writer=ImageWriter())
+    rv = io.BytesIO()
+    code128.write(rv)
+    image = Image.open(rv)
+    image.thumbnail((300, 300))
+    return image
 
-# def generate_product_barcode(product_code, batch_no, sell_by_date):
-#     """Generate a barcode for a product using Code128 format."""
-#     try:
-#         # Add timestamp to create a unique identifier
-#         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-#         combined_batch = f"{product_code}-{batch_no}-{timestamp}"
+def generate_product_barcode(product_code, batch_no, sell_by_date):
+    """Generate a barcode for a product using Code128 format."""
+    try:
+        # Add timestamp to create a unique identifier
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        combined_batch = f"{product_code}-{batch_no}-{timestamp}"
         
-#         # Generate the barcode in memory
-#         code128 = Code128(combined_batch, writer=ImageWriter())
+        # Generate the barcode in memory
+        code128 = Code128(combined_batch, writer=ImageWriter())
         
-#         # Save barcode to BytesIO buffer
-#         buffer = io.BytesIO()
-#         code128.write(buffer)
+        # Save barcode to 'barcodes' directory
+        barcode_filename = f'barcodes/{combined_batch}.png'
+        code128.write(barcode_filename)
         
-#         # Convert to base64
-#         barcode_image = base64.b64encode(buffer.getvalue()).decode()
+        # Convert to base64
+        with open(barcode_filename, 'rb') as image_file:
+            barcode_image = base64.b64encode(image_file.read()).decode()
         
-#         return {
-#             'barcode_data': combined_batch,
-#             'barcode_image': barcode_image
-#         }
-#     except Exception as e:
-#         print(f"Error generating barcode: {str(e)}")
-#         return None
+        return {
+            'barcode_data': combined_batch,
+            'barcode_image': barcode_image
+        }
+    except Exception as e:
+        print(f"Error generating barcode: {str(e)}")
+        return None
 
 def add_product_to_inventory(values, auth_system):
     """Add a new product to the inventory database."""
@@ -209,14 +213,14 @@ def add_product_to_inventory(values, auth_system):
             return False, "User not authenticated"
 
         # Generate barcode
-        # barcode_info = generate_product_barcode(
-        #     values['-PRODUCT_CODE-'],
-        #     values['-SUPPLIER_BATCH-'],
-        #     values['-SELL_BY_DATE-']
-        # )
+        barcode_info = generate_product_barcode(
+            values['-PRODUCT_CODE-'],
+            values['-SUPPLIER_BATCH-'],
+            values['-SELL_BY_DATE-']
+        )
         
-        # if not barcode_info:
-        #     return False, "Failed to generate barcode"
+        if not barcode_info:
+            return False, "Failed to generate barcode"
 
         conn = sqlite3.connect('spatrac.db')
         cursor = conn.cursor()
@@ -240,9 +244,8 @@ def add_product_to_inventory(values, auth_system):
             'Active',
             current_user['department'],
             f"Product added by {current_user['username']} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            # barcode_info['barcode_data'],
-            # barcode_info['barcode_image']
-            '', ''
+            barcode_info['barcode_data'],
+            barcode_info['barcode_image']
         ))
         
         conn.commit()
@@ -533,10 +536,10 @@ def handle_product_management_events(event, values, window, df, inventory, auth_
         if product_code and quantity and supplier_batch and sell_by_date:
             product = deliver_product(df, product_code, quantity, unit, supplier_batch, sell_by_date, auth_system, window)
             if product is not None:
-                # barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
-                # if barcode_info:
-                #     product['barcode_data'] = barcode_info['barcode_data']
-                #     product['barcode_image'] = barcode_info['barcode_image']
+                barcode_info = generate_product_barcode(product_code, supplier_batch, sell_by_date)
+                if barcode_info:
+                    product['barcode_data'] = barcode_info['barcode_data']
+                    product['barcode_image'] = barcode_info['barcode_image']
                 
                 inventory.append(product)
                 update_inventory_table(window, inventory)
@@ -1250,116 +1253,116 @@ def record_temperature_popup():
     window.close()
     return None
 
-# def generate_and_show_barcode(item):
-#     """Generate and display a barcode for the given item."""
-#     # Create a combined identifier combining product info
-#     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-#     combined_batch = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
+def generate_and_show_barcode(item):
+     """Generate and display a barcode for the given item."""
+     # Create a combined identifier combining product info
+     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+     combined_batch = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
     
-#     try:
-#         # Generate barcode image
-#         barcode_data = generate_barcode(combined_batch)
-#         if not barcode_data:
-#             sg.popup_error('Failed to generate barcode', font=FONT_NORMAL)
-#             return None
+     try:
+         # Generate barcode image
+         barcode_data = generate_barcode(combined_batch)
+         if not barcode_data:
+             sg.popup_error('Failed to generate barcode', font=FONT_NORMAL)
+             return None
             
-#         # Create window layout
-#         layout = [
-#             [sg.Text('Generated Barcode', font=FONT_HEADER)],
-#             [sg.Text(f"Product: {item['Product Description']}", font=FONT_NORMAL)],
-#             [sg.Text(f"Code: {item['Product Code']}", font=FONT_NORMAL)],
-#             [sg.Text(f"Batch: {item['Supplier Batch No']}", font=FONT_NORMAL)],
-#             [sg.Image(data=barcode_data, key='-IMAGE-')],
-#             [sg.Button('Save Barcode', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['primary'])),
-#              sg.Button('Close', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['secondary']))]
-#         ]
+         # Create window layout
+         layout = [
+             [sg.Text('Generated Barcode', font=FONT_HEADER)],
+             [sg.Text(f"Product: {item['Product Description']}", font=FONT_NORMAL)],
+             [sg.Text(f"Code: {item['Product Code']}", font=FONT_NORMAL)],
+             [sg.Text(f"Batch: {item['Supplier Batch No']}", font=FONT_NORMAL)],
+             [sg.Image(data=barcode_data, key='-IMAGE-')],
+             [sg.Button('Save Barcode', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['primary'])),
+              sg.Button('Close', font=FONT_NORMAL, button_color=(COLORS['text'], COLORS['secondary']))]
+         ]
         
-#         window = sg.Window('Barcode', layout, finalize=True)
+         window = sg.Window('Barcode', layout, finalize=True)
         
-#         while True:
-#             event, values = window.read()
-#             if event in (sg.WIN_CLOSED, 'Close'):
-#                 window.close()
-#                 return None
+         while True:
+             event, values = window.read()
+             if event in (sg.WIN_CLOSED, 'Close'):
+                 window.close()
+                 return None
                 
-#             if event == 'Save Barcode':
-#                 save_path = sg.popup_get_file(
-#                     'Save Barcode As...', 
-#                     save_as=True, 
-#                     default_extension='.png',
-#                     file_types=(('PNG Files', '*.png'),),
-#                     font=FONT_NORMAL
-#                 )
-#                 if save_path:
-#                     try:
-#                         save_barcode(barcode_data, item)
-#                         sg.popup('Barcode saved successfully!', font=FONT_NORMAL)
-#                     except Exception as e:
-#                         sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
+             if event == 'Save Barcode':
+                 save_path = sg.popup_get_file(
+                     'Save Barcode As...', 
+                     save_as=True, 
+                     default_extension='.png',
+                     file_types=(('PNG Files', '*.png'),),
+                     font=FONT_NORMAL
+                 )
+                 if save_path:
+                     try:
+                         save_barcode(barcode_data, item)
+                         sg.popup('Barcode saved successfully!', font=FONT_NORMAL)
+                     except Exception as e:
+                         sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
                         
-#         window.close()
-#         return None
+         window.close()
+         return None
         
-#     except Exception as e:
-#         sg.popup_error(f'Error generating barcode: {str(e)}', font=FONT_NORMAL)
-#         return None
+     except Exception as e:
+         sg.popup_error(f'Error generating barcode: {str(e)}', font=FONT_NORMAL)
+         return None
 
-# def save_barcode(barcode_data, item):
-#     """Save the barcode image and update the database with barcode information."""
-#     try:
-#         # Generate a unique filename based on item details
-#         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-#         default_filename = f"barcode_{item['Product Code']}_{timestamp}.png"
+def save_barcode(barcode_data, item):
+     """Save the barcode image and update the database with barcode information."""
+     try:
+         # Generate a unique filename based on item details
+         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+         default_filename = f"barcode_{item['Product Code']}_{timestamp}.png"
         
-#         # Get save location from user
-#         save_path = sg.popup_get_file(
-#             'Save Barcode As...', 
-#             save_as=True,
-#             default_extension='.png',
-#             default_path=default_filename,
-#             file_types=(('PNG Files', '*.png'),),
-#             font=FONT_NORMAL
-#         )
+         # Get save location from user
+         save_path = sg.popup_get_file(
+             'Save Barcode As...', 
+             save_as=True,
+             default_extension='.png',
+             default_path=default_filename,
+             file_types=(('PNG Files', '*.png'),),
+             font=FONT_NORMAL
+         )
         
-#         if not save_path:
-#             return False
+         if not save_path:
+             return False
             
-#         # Ensure .png extension
-#         if not save_path.lower().endswith('.png'):
-#             save_path += '.png'
+         # Ensure .png extension
+         if not save_path.lower().endswith('.png'):
+             save_path += '.png'
             
-#         # Save the barcode image
-#         with open(save_path, 'wb') as f:
-#             f.write(barcode_data)
+         # Save the barcode image
+         with open(save_path, 'wb') as f:
+             f.write(barcode_data)
             
-#         # Convert barcode data to base64 for database storage
-#         barcode_base64 = base64.b64encode(barcode_data).decode()
+         # Convert barcode data to base64 for database storage
+         barcode_base64 = base64.b64encode(barcode_data).decode()
         
-#         # Generate tracking ID
-#         tracking_id = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
+         # Generate tracking ID
+         tracking_id = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
         
-#         # Update database
-#         conn = sqlite3.connect('spatrac.db')
-#         cursor = conn.cursor()
+         # Update database
+         conn = sqlite3.connect('spatrac.db')
+         cursor = conn.cursor()
         
-#         cursor.execute('''
-#             UPDATE received_products 
-#             SET barcode_data = ?, barcode_image = ?
-#             WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
-#         ''', (tracking_id, barcode_base64, item['Product Code'], item['Supplier Batch No']))
+         cursor.execute('''
+             UPDATE received_products 
+             SET barcode_data = ?, barcode_image = ?
+             WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
+         ''', (tracking_id, barcode_base64, item['Product Code'], item['Supplier Batch No']))
         
-#         conn.commit()
-#         conn.close()
+         conn.commit()
+         conn.close()
         
-#         # Update the item dictionary
-#         item['barcode_data'] = tracking_id
-#         item['barcode_image'] = barcode_base64
+         # Update the item dictionary
+         item['barcode_data'] = tracking_id
+         item['barcode_image'] = barcode_base64
         
-#         return True
+         return True
         
-#     except Exception as e:
-#         sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
-#         return False
+     except Exception as e:
+         sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
+         return False
 
 def save_as_pdf(report, filename):
     pdf = FPDF()
@@ -1462,8 +1465,8 @@ def add_received_product(product, auth_system, window=None):
                 product_code, description, quantity, unit,
                 supplier_batch, sell_by_date, status,
                 received_date, received_by, handling_history,
-                temperature_log, department, processed_by, processing_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temperature_log, department, processed_by, processing_date, barcode_data, barcode_image
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
@@ -1478,7 +1481,9 @@ def add_received_product(product, auth_system, window=None):
             json.dumps(product['Temperature Log']),
             product['Department'],
             product.get('Processed By', ''),
-            product.get('Processing Date', '')
+            product.get('Processing Date', ''),
+            product.get('barcode_data', ''),
+            product.get('barcode_image', '')
         ))
         
         conn.commit()
