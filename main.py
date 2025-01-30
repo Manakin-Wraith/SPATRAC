@@ -230,8 +230,8 @@ def add_product_to_inventory(values, auth_system):
                 product_code, description, quantity, unit, 
                 supplier_batch, sell_by_date, received_date,
                 received_by, status, department, handling_history,
-                barcode_data, barcode_image
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tracking_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             values['-PRODUCT_CODE-'],
             values['-DESCRIPTION-'],
@@ -244,8 +244,7 @@ def add_product_to_inventory(values, auth_system):
             'Active',
             current_user['department'],
             f"Product added by {current_user['username']} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            barcode_info['barcode_data'],
-            barcode_info['barcode_image']
+            f"{values['-PRODUCT_CODE-']}-{values['-SUPPLIER_BATCH-']}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         ))
         
         conn.commit()
@@ -1347,7 +1346,7 @@ def save_barcode(barcode_data, item):
         
          cursor.execute('''
              UPDATE received_products 
-             SET barcode_data = ?, barcode_image = ?
+             SET tracking_id = ?, barcode_image = ?
              WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
          ''', (tracking_id, barcode_base64, item['Product Code'], item['Supplier Batch No']))
         
@@ -1355,7 +1354,7 @@ def save_barcode(barcode_data, item):
          conn.close()
         
          # Update the item dictionary
-         item['barcode_data'] = tracking_id
+         item['tracking_id'] = tracking_id
          item['barcode_image'] = barcode_base64
         
          return True
@@ -1405,7 +1404,7 @@ def initialize_database():
             temperature_log TEXT DEFAULT '',
             processed_by TEXT,
             processing_date TEXT,
-            barcode_data TEXT,
+            tracking_id TEXT,
             barcode_image TEXT
         )
     ''')
@@ -1420,7 +1419,7 @@ def initialize_database():
         'temperature_log': 'TEXT DEFAULT ""',
         'processed_by': 'TEXT',
         'processing_date': 'TEXT',
-        'barcode_data': 'TEXT',
+        'tracking_id': 'TEXT',
         'barcode_image': 'TEXT'
     }
     
@@ -1465,8 +1464,8 @@ def add_received_product(product, auth_system, window=None):
                 product_code, description, quantity, unit,
                 supplier_batch, sell_by_date, status,
                 received_date, received_by, handling_history,
-                temperature_log, department, processed_by, processing_date, barcode_data, barcode_image
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temperature_log, department, tracking_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
@@ -1480,10 +1479,7 @@ def add_received_product(product, auth_system, window=None):
             json.dumps(product['Handling History']),
             json.dumps(product['Temperature Log']),
             product['Department'],
-            product.get('Processed By', ''),
-            product.get('Processing Date', ''),
-            product.get('barcode_data', ''),
-            product.get('barcode_image', '')
+            f"{product['Product Code']}-{product['Supplier Batch No']}-{current_time}"
         ))
         
         conn.commit()
@@ -1518,7 +1514,7 @@ def get_department_inventory(department):
                    sell_by_date, received_date, received_by, status, department,
                    COALESCE(handling_history, '[]') as handling_history,
                    COALESCE(temperature_log, '[]') as temperature_log,
-                   COALESCE(barcode_data, '') as barcode_data,
+                   COALESCE(tracking_id, '') as tracking_id,
                    COALESCE(barcode_image, '') as barcode_image,
                    COALESCE(processed_by, '') as processed_by,
                    COALESCE(processing_date, '') as processing_date
@@ -1557,11 +1553,13 @@ def get_department_inventory(department):
             except json.JSONDecodeError:
                 item['Temperature Log'] = []
             
+            # Add tracking ID if available
+            tracking_id = item.pop('tracking_id', '')
+            if tracking_id:
+                item['tracking_id'] = tracking_id
+            
             # Add barcode data if available
-            barcode_data = item.pop('barcode_data', '')
             barcode_image = item.pop('barcode_image', '')
-            if barcode_data:
-                item['barcode_data'] = barcode_data
             if barcode_image:
                 item['barcode_image'] = barcode_image
             
@@ -1663,7 +1661,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                     processed_by,
                     processing_date,
                     handling_history,
-                    barcode_data,
+                    tracking_id,
                     barcode_image
                 FROM received_products
                 WHERE 1=1
@@ -1694,7 +1692,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
             # Format results for display
             formatted_results = []
             for row in results:
-                formatted_row = list(row[:9])  # Get all columns except handling_history, barcode_data, barcode_image
+                formatted_row = list(row[:9])  # Get all columns except handling_history, tracking_id, barcode_image
                 formatted_results.append(formatted_row)
                 
             window['-DB-TABLE-'].update(formatted_results)
@@ -2085,10 +2083,10 @@ def show_product_details(product, auth_system):
     ]
     
     # Add barcode section if available
-    if product.get('barcode_data'):
+    if product.get('tracking_id'):
         layout.extend([
             [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
+            [sg.Text(f"Barcode Data: {product['tracking_id']}")],
         ])
         if barcode_image_path:
             layout.append([sg.Image(barcode_image_path, size=(300, 100))])
