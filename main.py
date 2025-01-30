@@ -5,8 +5,8 @@ from fpdf import FPDF
 from datetime import datetime
 import sqlite3
 import json
-# from barcode import Code128
-# from barcode.writer import ImageWriter
+from barcode import Code128
+from barcode.writer import ImageWriter
 from auth_system import AuthSystem
 import logging
 
@@ -314,7 +314,7 @@ def show_database_product_details(product, auth_system):
         [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
         [sg.Multiline(product.get('handling_history', 'No handling history available'), size=(60, 5), disabled=True)],
         [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline('\n'.join(product.get('temperature_log', ['No temperature log available'])), size=(60, 3), disabled=True)],
+        [sg.Multiline('\n'.join([str(entry) for entry in product.get('temperature_log', ['No temperature log available'])]), size=(60, 3), disabled=True)],
         [sg.Button('Close')]
     ])
     
@@ -785,28 +785,18 @@ def update_product_in_database(product):
     cursor.execute('''
         UPDATE received_products
         SET status = ?,
-            handling_history = ?
+            handling_history = ?,
+            processed_by = ?,
+            processing_date = ?
         WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
     ''', (
         product['Status'],
         handling_history,
+        product['Processed By'],
+        product['Processing Date'],
         product['Product Code'],
         product.get('Supplier Batch No', '')
     ))
-    
-    # Update processed_by and processing_date in a separate query if they exist
-    if product.get('Processed By') and product.get('Processing Date'):
-        cursor.execute('''
-            UPDATE received_products
-            SET processed_by = ?,
-                processing_date = ?
-            WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
-        ''', (
-            product['Processed By'],
-            product['Processing Date'],
-            product['Product Code'],
-            product.get('Supplier Batch No', '')
-        ))
     
     conn.commit()
     conn.close()
@@ -1472,8 +1462,8 @@ def add_received_product(product, auth_system, window=None):
                 product_code, description, quantity, unit,
                 supplier_batch, sell_by_date, status,
                 received_date, received_by, handling_history,
-                temperature_log, department
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temperature_log, department, processed_by, processing_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
@@ -1486,7 +1476,9 @@ def add_received_product(product, auth_system, window=None):
             product['Received By'],
             json.dumps(product['Handling History']),
             json.dumps(product['Temperature Log']),
-            product['Department']
+            product['Department'],
+            product.get('Processed By', ''),
+            product.get('Processing Date', '')
         ))
         
         conn.commit()
@@ -1522,7 +1514,9 @@ def get_department_inventory(department):
                    COALESCE(handling_history, '[]') as handling_history,
                    COALESCE(temperature_log, '[]') as temperature_log,
                    COALESCE(barcode_data, '') as barcode_data,
-                   COALESCE(barcode_image, '') as barcode_image
+                   COALESCE(barcode_image, '') as barcode_image,
+                   COALESCE(processed_by, '') as processed_by,
+                   COALESCE(processing_date, '') as processing_date
             FROM received_products
             WHERE department = ? AND status = 'Active'
             ORDER BY received_date DESC
@@ -1565,6 +1559,10 @@ def get_department_inventory(department):
                 item['barcode_data'] = barcode_data
             if barcode_image:
                 item['barcode_image'] = barcode_image
+            
+            # Add processing information if available
+            item['Processed By'] = item.pop('processed_by', '')
+            item['Processing Date'] = item.pop('processing_date', '')
             
             inventory.append(item)
         
@@ -2074,29 +2072,39 @@ def show_product_details(product, auth_system):
     # Create the layout
     layout = [
         [sg.Text('Product Details', font=('Helvetica', 12, 'bold'))],
-        [sg.Text(f"Product Code: {product['Product Code']}", font=FONT_NORMAL)],
-        [sg.Text(f"Description: {product['Product Description']}", font=FONT_NORMAL)],
-        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}", font=FONT_NORMAL)],
-        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}", font=FONT_NORMAL)],
-        [sg.Text(f"Status: {product.get('Status', 'N/A')}", font=FONT_NORMAL)],
+        [sg.Text(f"Product Code: {product['Product Code']}")],
+        [sg.Text(f"Description: {product['Product Description']}")],
+        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
+        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
+        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
     ]
     
     # Add barcode section if available
     if product.get('barcode_data'):
         layout.extend([
             [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Barcode Data: {product['barcode_data']}", font=FONT_NORMAL)],
+            [sg.Text(f"Barcode Data: {product['barcode_data']}")],
         ])
         if barcode_image_path:
             layout.append([sg.Image(barcode_image_path, size=(300, 100))])
     
+    # Add processing information if available
+    if product.get('processed_by'):
+        layout.extend([
+            [sg.Text('Processing Information', font=('Helvetica', 10, 'bold'))],
+            [sg.Text(f"Processed By: {product['processed_by']}")],
+            [sg.Text(f"Processing Date: {product.get('processing_date', 'N/A')}")],
+        ])
+    
+    temperature_log = product.get('Temperature Log', ['No temperature log available'])
+    # Ensure all entries in temperature_log are strings
+    temperature_log = [str(entry) for entry in temperature_log]  # Convert dicts to strings if necessary
+    
     layout.extend([
         [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline(product.get('Handling History', 'No handling history available'), 
-                     size=(60, 5), disabled=True, font=FONT_NORMAL)],
+        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
         [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline(format_temperature_log(product.get('Temperature Log', [])), 
-                     size=(60, 3), disabled=True, font=FONT_NORMAL)],
+        [sg.Multiline('\n'.join(temperature_log), size=(60, 3), disabled=True)],
         [sg.Button('Close', font=FONT_NORMAL)]
     ])
     
