@@ -12,6 +12,7 @@ from auth_system import AuthSystem
 import logging
 import base64
 import os
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -230,8 +231,8 @@ def add_product_to_inventory(values, auth_system):
                 product_code, description, quantity, unit, 
                 supplier_batch, sell_by_date, received_date,
                 received_by, status, department, handling_history,
-                tracking_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tracking_id, barcode_image
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             values['-PRODUCT_CODE-'],
             values['-DESCRIPTION-'],
@@ -244,7 +245,8 @@ def add_product_to_inventory(values, auth_system):
             'Active',
             current_user['department'],
             f"Product added by {current_user['username']} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"{values['-PRODUCT_CODE-']}-{values['-SUPPLIER_BATCH-']}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            f"{values['-PRODUCT_CODE-']}-{values['-SUPPLIER_BATCH-']}-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+            barcode_info['barcode_image']
         ))
         
         conn.commit()
@@ -888,13 +890,20 @@ def handle_recipes_events(event, values, window, df):
         window['-INGREDIENTS_TABLE-'].update([])
 
 def load_recipes_from_csv():
+    """
+    Load recipes from CSV file and store them in the database.
+    Returns a dictionary of recipes organized by department.
+    """
     recipes = {}
     try:
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
         df = pd.read_csv('DEPARTMENTS - RECIPES - ALL DEPT..csv')
         
         # Initialize variables for tracking current recipe
         current_dept = None
         current_recipe = None
+        current_recipe_id = None
         current_ingredients = []
         
         for _, row in df.iterrows():
@@ -914,23 +923,49 @@ def load_recipes_from_csv():
                     'department': row['Department'],
                     'ingredients': []
                 }
+                
+                # Insert or update recipe in database
+                cursor.execute('''
+                    INSERT OR REPLACE INTO recipes (code, name, department)
+                    VALUES (?, ?, ?)
+                ''', (current_recipe['code'], current_recipe['name'], current_recipe['department']))
+                current_recipe_id = cursor.lastrowid
+                
+                # Clear old ingredients for this recipe
+                cursor.execute('DELETE FROM recipe_ingredients WHERE recipe_id = ?', (current_recipe_id,))
+                
                 current_ingredients = []
             
             # Add ingredient to current recipe
-            if pd.notna(row['Ingredient Prod Code']):
+            if pd.notna(row['Ingredient Prod Code']) and current_recipe_id is not None:
                 ingredient = [
                     str(row['Ingredient Prod Code']),
                     str(row['Ingredient Description']),
-                    str(row['Recipe']) if pd.notna(row['Recipe']) else '0',
+                    float(row['Recipe']) if pd.notna(row['Recipe']) else 0,
                     str(row['Pack Deliver']) if pd.notna(row['Pack Deliver']) else 'P/KG'
                 ]
                 current_recipe['ingredients'].append(ingredient)
+                
+                # Add ingredient to database
+                cursor.execute('''
+                    INSERT INTO recipe_ingredients (recipe_id, ingredient_code, quantity, unit)
+                    VALUES (?, ?, ?, ?)
+                ''', (current_recipe_id, ingredient[0], ingredient[2], ingredient[3]))
+                
+                # Also ensure the ingredient exists in the ingredients table
+                cursor.execute('''
+                    INSERT OR IGNORE INTO ingredients (code, name, unit, department)
+                    VALUES (?, ?, ?, ?)
+                ''', (ingredient[0], ingredient[1], ingredient[3], current_dept))
         
         # Add the last recipe
         if current_recipe is not None:
             if current_dept not in recipes:
                 recipes[current_dept] = []
             recipes[current_dept].append(current_recipe)
+        
+        conn.commit()
+        conn.close()
             
     except Exception as e:
         print(f"Error loading recipes from CSV: {e}")
@@ -1289,7 +1324,7 @@ def generate_and_show_barcode(item):
                      'Save Barcode As...', 
                      save_as=True, 
                      default_extension='.png',
-                     file_types=(('PNG Files', '*.png'),),
+                     file_types=(("PNG Files", "*.png"),),
                      font=FONT_NORMAL
                  )
                  if save_path:
@@ -1319,7 +1354,7 @@ def save_barcode(barcode_data, item):
              save_as=True,
              default_extension='.png',
              default_path=default_filename,
-             file_types=(('PNG Files', '*.png'),),
+             file_types=(("PNG Files", "*.png"),),
              font=FONT_NORMAL
          )
         
@@ -1408,6 +1443,40 @@ def initialize_database():
             barcode_image TEXT
         )
     ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ingredients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            code TEXT UNIQUE,
+            unit TEXT,
+            department TEXT,
+            description TEXT,
+            created_date TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE,
+            name TEXT NOT NULL,
+            department TEXT,
+            created_date TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS recipe_ingredients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER,
+            ingredient_code TEXT,
+            quantity REAL,
+            unit TEXT,
+            FOREIGN KEY (recipe_id) REFERENCES recipes (id),
+            FOREIGN KEY (ingredient_code) REFERENCES ingredients (code)
+        )
+    ''')
     
     # Check if columns exist and add them if they don't
     cursor.execute("PRAGMA table_info(received_products)")
@@ -1464,33 +1533,37 @@ def add_received_product(product, auth_system, window=None):
                 product_code, description, quantity, unit,
                 supplier_batch, sell_by_date, status,
                 received_date, received_by, handling_history,
-                temperature_log, department, tracking_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                temperature_log, department, tracking_id,
+                barcode_image
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
             product['Quantity'],
             product['Unit'],
-            product['Supplier Batch No'],
+            product['Supplier Batch No'],  # Changed from 'Supplier Batch' to 'Supplier Batch No'
             product['Sell By Date'],
-            product['Status'],
+            'Active',
             product['Received Date'],
             product['Received By'],
             json.dumps(product['Handling History']),
             json.dumps(product['Temperature Log']),
             product['Department'],
-            f"{product['Product Code']}-{product['Supplier Batch No']}-{current_time}"
+            str(uuid.uuid4()),  # tracking_id
+            ''  # barcode_image
         ))
         
+        # Get the ID of the newly inserted product
+        product_id = cursor.lastrowid
         conn.commit()
+        
+        # Find and notify about matching recipes
+        matching_recipes = find_matching_recipes(product['Product Code'])
+        if matching_recipes:
+            notify_matching_recipes(product, matching_recipes, window)
+        
         conn.close()
-        
-        # If window is provided, refresh the display
-        if window is not None:
-            refresh_display(window, [], auth_system)
-            
-        return True
-        
+        return True, product_id
     except Exception as e:
         sg.popup_error('Error', f'Failed to add product: {str(e)}', font=FONT_NORMAL)
         return False
@@ -1713,7 +1786,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                     writer = csv.writer(f)
                     writer.writerow(['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'])
                     writer.writerows(window['-DB-TABLE-'].get())
-                sg.popup('Success', f"Report saved as {filename}")
+                sg.popup('Report saved successfully!', title='Success')
             except Exception as e:
                 sg.popup_error('Export Error', f'Error saving CSV: {str(e)}')
 
@@ -2171,7 +2244,7 @@ def generate_traceability_report(inventory, start_date, end_date, auth_system):
         # Filter inventory by date range
         filtered_inventory = [
             item for item in inventory 
-            if start_date.date() <= datetime.strptime(item.get('Received Date', '1900-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S').date() <= end_date.date()
+            if start_date.date() <= datetime.strptime(item.get('Received Date', ''), '%Y-%m-%d %H:%M:%S').date() <= end_date.date()
         ]
         logging.info(f'Filtered inventory: {filtered_inventory}')
 
@@ -2254,6 +2327,99 @@ def fetch_received_products(conn):
     cursor.execute('SELECT * FROM received_products')
     received_products_df = pd.DataFrame(cursor.fetchall())
     return received_products_df
+
+def add_ingredient(name, code, unit, department, description=''):
+    """
+    Add a new ingredient to the database.
+    
+    Args:
+        name (str): Name of the ingredient
+        code (str): Unique code for the ingredient
+        unit (str): Unit of measurement
+        department (str): Department the ingredient belongs to
+        description (str, optional): Additional details about the ingredient
+    
+    Returns:
+        bool: True if successful, False otherwise
+        str: Success message or error message
+    """
+    try:
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO ingredients (name, code, unit, department, description)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (name, code, unit, department, description))
+        
+        conn.commit()
+        conn.close()
+        return True, "Ingredient added successfully"
+    except sqlite3.IntegrityError:
+        return False, f"Error: Ingredient code '{code}' already exists"
+    except Exception as e:
+        return False, f"Error adding ingredient: {str(e)}"
+
+def find_matching_recipes(product_code):
+    """
+    Find all recipes that use a given product code as an ingredient.
+    
+    Args:
+        product_code (str): The code of the received product
+        
+    Returns:
+        list: List of recipe dictionaries that use this product
+    """
+    try:
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT r.id, r.code, r.name, r.department, ri.quantity, ri.unit
+            FROM recipes r
+            JOIN recipe_ingredients ri ON r.id = ri.recipe_id
+            WHERE ri.ingredient_code = ?
+        ''', (product_code,))
+        
+        matching_recipes = []
+        for row in cursor.fetchall():
+            recipe = {
+                'id': row[0],
+                'code': row[1],
+                'name': row[2],
+                'department': row[3],
+                'ingredient_quantity': row[4],
+                'ingredient_unit': row[5]
+            }
+            matching_recipes.append(recipe)
+        
+        conn.close()
+        return matching_recipes
+    except Exception as e:
+        print(f"Error finding matching recipes: {e}")
+        return []
+
+def notify_matching_recipes(product, matching_recipes, window=None):
+    """
+    Notify about matching recipes for a received product.
+    
+    Args:
+        product (dict): The received product information
+        matching_recipes (list): List of recipes that use this product
+        window (PySimpleGUI.Window, optional): Window to update if provided
+    """
+    if not matching_recipes:
+        return
+    
+    notification = f"Product {product['Product Code']} is used in the following recipes:\n\n"
+    for recipe in matching_recipes:
+        notification += f"- {recipe['name']} (Code: {recipe['code']}) in {recipe['department']}\n"
+        notification += f"  Required: {recipe['ingredient_quantity']} {recipe['ingredient_unit']}\n"
+    
+    if window:
+        sg.popup("Recipe Matches Found", notification, title="Recipe Information")
+    else:
+        print(notification)
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
