@@ -231,8 +231,8 @@ def add_product_to_inventory(values, auth_system):
                 product_code, description, quantity, unit, 
                 supplier_batch, sell_by_date, received_date,
                 received_by, status, department, handling_history,
-                tracking_id, barcode_image
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tracking_id, barcode_image, department_manager, supplier_name, supplier_address, country_of_origin, packaging_type, food_handler_name, packaging_batch_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             values['-PRODUCT_CODE-'],
             values['-DESCRIPTION-'],
@@ -246,7 +246,14 @@ def add_product_to_inventory(values, auth_system):
             current_user['department'],
             f"Product added by {current_user['username']} on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"{values['-PRODUCT_CODE-']}-{values['-SUPPLIER_BATCH-']}-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-            barcode_info['barcode_image']
+            barcode_info['barcode_image'],
+            current_user['username'],  # department_manager
+            'Supplier Name',  # supplier_name
+            'Supplier Address',  # supplier_address
+            'Country of Origin',  # country_of_origin
+            'Packaging Type',  # packaging_type
+            current_user['username'],  # food_handler_name
+            values['-SUPPLIER_BATCH-']  # packaging_batch_code
         ))
         
         conn.commit()
@@ -604,7 +611,7 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
             return
             
         selected_product = active_items[selected_rows[0]]
-        show_product_details(selected_product, auth_system)
+        show_detailed_traceability(selected_product, auth_system)
     
     elif event == 'View Processed Details':
         selected_rows = values['-PROCESSED_TABLE-']
@@ -619,7 +626,7 @@ def handle_receiving_events(event, values, window, inventory, auth_system):
             return
             
         selected_product = processed_items[selected_rows[0]]
-        show_product_details(selected_product, auth_system)
+        show_detailed_traceability(selected_product, auth_system)
     
     elif event == 'Process Selected':
         selected_rows = values['-RECEIVING_TABLE-']
@@ -1040,88 +1047,313 @@ def update_recipes_table(window):
 
 def handle_reports_events(event, values, window, inventory, auth_system):
     """Handle events in the Reports tab."""
-    if event == '-GENERATE_REPORT-':
-        try:
-            start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
-            end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
-            report_type = values['-REPORT_TYPE-']
+    try:
+        if event == '-GENERATE_REPORT-':
+            print("DEBUG: Generate report button clicked")
+            print(f"DEBUG: Current values: {values}")
             
-            # Get raw report data
-            report_data = generate_report(inventory, report_type, start_date, end_date, auth_system)
-            
-            # Format report for display
-            formatted_report = format_report_for_display(report_data, report_type, auth_system)
-            window['-REPORT_PREVIEW-'].update(formatted_report)
-            
-            # Store raw data for saving
-            window.user_data = {
-                'current_report': {
-                    'data': report_data,
-                    'type': report_type,
+            # Parse dates
+            try:
+                start_date = datetime.strptime(values['-START_DATE-'], '%Y-%m-%d')
+                end_date = datetime.strptime(values['-END_DATE-'], '%Y-%m-%d')
+                print(f"DEBUG: Parsed dates - Start: {start_date}, End: {end_date}")
+            except ValueError as date_error:
+                print(f"DEBUG: Date parsing error - {date_error}")
+                sg.popup_error('Invalid date format. Please use YYYY-MM-DD', font=FONT_NORMAL)
+                return
+
+            # Get department filter
+            department = values['-REPORT_DEPT-']
+            product_code = values['-REPORT_PRODUCT_CODE-'].strip()
+            print(f"DEBUG: Department filter: {department}")
+            print(f"DEBUG: Product code filter: {product_code}")
+            print(f"DEBUG: Inventory size: {len(inventory) if inventory else 'None'}")
+
+            try:
+                # Generate traceability report
+                print("DEBUG: Calling generate_traceability_report")
+                report_data = generate_traceability_report(inventory, start_date, end_date, auth_system)
+                print(f"DEBUG: Report data generated, items: {len(report_data)}")
+
+                # Apply filters
+                if department != 'All':
+                    report_data = [item for item in report_data if item.get('Department') == department]
+                    print(f"DEBUG: After department filter: {len(report_data)} items")
+                if product_code:
+                    report_data = [item for item in report_data if product_code.lower() in item.get('Product Code', '').lower()]
+                    print(f"DEBUG: After product code filter: {len(report_data)} items")
+
+                # Store report data and dates for export
+                window.user_data = {
+                    'report_data': report_data,
                     'start_date': start_date,
                     'end_date': end_date
                 }
-            }
-            
-        except ValueError as e:
-            sg.popup_error(f'Error generating report: {str(e)}', title='Report Generation Error')
-            
-    elif event == '-SAVE_PDF-':
-        try:
-            if not hasattr(window, 'user_data') or 'current_report' not in window.user_data:
-                sg.popup_error('Please generate a report first.', title='Export Error')
-                return
-                
-            filename = sg.popup_get_file('Save PDF as:', save_as=True, 
-                                       file_types=(("PDF Files", "*.pdf"),),
-                                       default_extension='.pdf')
-            if filename:
-                report_info = window.user_data['current_report']
-                save_report_as_pdf(filename, report_info['data'], report_info['type'],
-                                 report_info['start_date'], report_info['end_date'],
-                                 auth_system)
-                sg.popup('Report saved successfully!', title='Success')
-                
-        except Exception as e:
-            sg.popup_error(f'Error saving PDF: {str(e)}', title='PDF Export Error')
-            
-    elif event == '-SAVE_CSV-':
-        try:
-            if not hasattr(window, 'user_data') or 'current_report' not in window.user_data:
-                sg.popup_error('Please generate a report first.', title='Export Error')
-                return
-                
-            filename = sg.popup_get_file('Save CSV as:', save_as=True, 
-                                       file_types=(("CSV Files", "*.csv"),),
-                                       default_extension='.csv')
-            if filename:
-                report_info = window.user_data['current_report']
-                save_report_as_csv(filename, report_info['data'], report_info['type'],
-                                 report_info['start_date'], report_info['end_date'],
-                                 auth_system)
-                sg.popup('Report saved successfully!', title='Success')
-                
-        except Exception as e:
-            sg.popup_error(f'Error saving CSV: {str(e)}', title='CSV Export Error')
 
-def generate_report(inventory, report_type, start_date, end_date, auth_system):
-    try:
-        if not auth_system or not auth_system.get_current_user_info():
-            raise ValueError("User not authenticated")
-            
-        if report_type == 'Inventory Summary':
-            return generate_inventory_summary(inventory, start_date, end_date, auth_system)
-        elif report_type == 'Traceability Report':
-            return generate_traceability_report(inventory, start_date, end_date, auth_system)
-        else:
-            raise ValueError(f"Unknown report type: {report_type}")
+                # Update table with report data
+                table_data = []
+                for item in report_data:
+                    try:
+                        temp_log = format_temperature_log(item.get('Temperature Log', []))
+                        handling_history = '\n'.join(item.get('Handling History', [])) if isinstance(item.get('Handling History'), list) else item.get('Handling History', '')
+                        
+                        row_data = [
+                            item.get('Product Code', ''),
+                            item.get('Product Description', ''),
+                            item.get('Supplier Batch No', ''),
+                            item.get('Received Date', ''),
+                            item.get('Status', ''),
+                            temp_log,
+                            handling_history
+                        ]
+                        table_data.append(row_data)
+                    except Exception as row_error:
+                        print(f"DEBUG: Error processing row - {row_error}")
+                        print(f"DEBUG: Problematic item - {item}")
+                        continue
+
+                print(f"DEBUG: Final table data rows: {len(table_data)}")
+                window['-REPORT_TABLE-'].update(values=table_data)
+                print("DEBUG: Table updated successfully")
+
+            except Exception as report_error:
+                print(f"DEBUG: Error in report generation - {report_error}")
+                sg.popup_error(f'Error generating report: {str(report_error)}', font=FONT_NORMAL)
+                return
+
+        elif event == '-REPORT_TABLE-':
+            if len(values['-REPORT_TABLE-']) > 0:
+                selected_row = values['-REPORT_TABLE-'][0]
+                print(f"DEBUG: Selected row index: {selected_row}")
+                show_detailed_traceability(inventory[selected_row], auth_system)
+
+        elif event == '-SAVE_PDF-':
+            if not hasattr(window, 'user_data') or 'report_data' not in window.user_data:
+                print("DEBUG: No report data available for PDF export")
+                sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                return
+                
+            save_path = sg.popup_get_file('Save PDF Report As', save_as=True, 
+                                        file_types=(("PDF Files", "*.pdf"),), 
+                                        default_extension=".pdf")
+            if save_path:
+                success = save_report_as_pdf(
+                    save_path,
+                    window.user_data['report_data'],
+                    "Traceability Report",
+                    window.user_data['start_date'],
+                    window.user_data['end_date'],
+                    auth_system
+                )
+                if success:
+                    sg.popup('Success', 'Report saved successfully!', font=FONT_NORMAL)
+
+        elif event == '-SAVE_CSV-':
+            if 'report_data' not in locals():
+                print("DEBUG: No report data available for CSV export")
+                sg.popup_error('Please generate a report first', font=FONT_NORMAL)
+                return
+                
+            save_path = sg.popup_get_file('Save CSV Report As', save_as=True, 
+                                        file_types=(("CSV Files", "*.csv"),), 
+                                        default_extension=".csv")
+            if save_path:
+                save_report_as_csv(save_path, report_data, "Traceability Report", window.user_data['start_date'], window.user_data['end_date'], auth_system)
+                sg.popup('Success', 'Report saved successfully!', font=FONT_NORMAL)
+
     except Exception as e:
-        raise Exception(f"Error generating report: {str(e)}")
+        print(f"DEBUG: Critical error in handle_reports_events - {e}")
+        sg.popup_error(f'Error handling report event: {str(e)}', font=FONT_NORMAL)
+        logging.error(f'Error in handle_reports_events: {str(e)}', exc_info=True)
 
-def update_product_fields(window, product):
-    window['-PRODUCT-'].update(product['Product Code'])
-    window['-SUPPLIER_PRODUCT-'].update(product['Supplier Product Code'])
-    window['-DEPARTMENT-'].update(product['Department'])
+def generate_traceability_report(inventory, start_date, end_date, auth_system):
+    """
+    Generate a traceability report for items within the specified date range.
+    """
+    print(f"DEBUG: Starting report generation with date range: {start_date} to {end_date}")
+    print(f"DEBUG: Inventory type: {type(inventory)}")
+    print(f"DEBUG: Inventory size: {len(inventory) if inventory else 'None'}")
+    print("DEBUG: First few inventory items:")
+    for i, item in enumerate(inventory[:3]):  # Print first 3 items for inspection
+        print(f"DEBUG: Item {i}:")
+        print(f"  - Product Code: {item.get('Product Code')}")
+        print(f"  - Description: {item.get('Product Description')}")
+        print(f"  - Delivery Date: {item.get('Delivery Date')}")
+        print(f"  - All keys: {list(item.keys())}")
+    
+    report_data = []
+    
+    if not inventory:
+        print("DEBUG: Inventory is empty or None")
+        return report_data
+        
+    for index, item in enumerate(inventory):
+        try:
+            print(f"\nDEBUG: Processing item {index}: {item.get('Product Code', 'No Code')}")
+            delivery_date_str = item.get('Delivery Date', '')
+            print(f"DEBUG: Delivery date string: {delivery_date_str}")
+            
+            if not delivery_date_str:
+                print(f"DEBUG: No delivery date for item {index}")
+                continue
+                
+            try:
+                # Try different datetime formats with time components
+                try:
+                    delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    try:
+                        delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d %H:%M')
+                    except ValueError:
+                        try:
+                            delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d')
+                        except ValueError:
+                            print(f"DEBUG: Could not parse date {delivery_date_str} in any format")
+                            continue
+                
+                print(f"DEBUG: Parsed delivery date: {delivery_date}")
+                
+                # Compare only the date parts
+                delivery_date = delivery_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                print(f"DEBUG: Comparing dates: {start_date} <= {delivery_date} <= {end_date}")
+                print(f"DEBUG: Date comparison result: {start_date <= delivery_date <= end_date}")
+                
+            except ValueError as date_error:
+                print(f"DEBUG: Date parsing error for item {index} - {date_error}")
+                continue
+                
+            if start_date <= delivery_date <= end_date:
+                print(f"DEBUG: Item {index} is within date range")
+                
+                # Parse handling history for food handler names
+                handling_history = item.get('Handling History', [])
+                if isinstance(handling_history, str):
+                    handling_history = handling_history.split('\n') if handling_history else []
+                
+                food_handlers = []
+                for entry in handling_history:
+                    if 'handled by' in entry.lower():
+                        handler = entry.split('handled by')[-1].strip()
+                        food_handlers.append(handler)
+                
+                # Create report item with audit schema fields
+                report_item = {
+                    'Product Code': item.get('Product Code', ''),
+                    'Product Description': item.get('Product Description', ''),
+                    'Product Name': item.get('Product Description', ''),  # For audit schema
+                    'Supplier Batch No': item.get('Supplier Batch No', ''),
+                    'Packaging Batch Code': item.get('Supplier Batch No', ''),  # For audit schema
+                    'Received Date': delivery_date_str,
+                    'Sell By Date': item.get('Sell By Date', ''),
+                    'Status': item.get('Status', ''),
+                    'Department': item.get('Department', ''),
+                    'Department Manager': item.get('Department Manager', ''),
+                    'Food Handler Names': food_handlers,
+                    'Temperature Log': item.get('Temperature Log', []),
+                    'Handling History': handling_history,
+                    'Received By': item.get('Received By', ''),
+                    'Processed By': item.get('Processed By', ''),
+                    'Processing Date': item.get('Processing Date', ''),
+                    'Tracking ID': item.get('Tracking ID', '')
+                }
+                
+                # Add packaging information if available
+                packaging_info = {
+                    'Supplier Name': item.get('Supplier Name', ''),
+                    'Supplier Address': item.get('Supplier Address', ''),
+                    'Packaging Type': item.get('Packaging Type', ''),
+                    'Quantity Received': item.get('Quantity', ''),
+                    'Unit': item.get('Unit', '')
+                }
+                report_item['Packaging Info'] = packaging_info
+                
+                report_data.append(report_item)
+                print(f"DEBUG: Added item to report")
+                
+        except Exception as e:
+            print(f"DEBUG: Error processing item {index} - {e}")
+            continue
+            
+    print(f"DEBUG: Final report contains {len(report_data)} items")
+    return report_data
+
+def show_detailed_traceability(product, auth_system):
+    """Show detailed traceability information for a product."""
+    if not product:
+        return
+
+    layout = [
+        [sg.Text('Product Traceability Details', font=FONT_HEADER, justification='center')],
+        [sg.Frame('Product Information', [
+            [sg.Text(f"Product Code: {product.get('Product Code', 'N/A')}")],
+            [sg.Text(f"Description: {product.get('Product Description', 'N/A')}")],
+            [sg.Text(f"Batch Number: {product.get('Supplier Batch No', 'N/A')}")],
+            [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
+        ])],
+        [sg.Frame('Temperature History', [
+            [sg.Multiline(format_temperature_log(product.get('Temperature Log', [])),
+                         size=(50, 5), disabled=True, font=FONT_NORMAL)]
+        ])],
+        [sg.Frame('Handling History', [
+            [sg.Multiline('\n'.join(product.get('Handling History', [])) if isinstance(product.get('Handling History'), list)
+                         else product.get('Handling History', 'No handling history available'),
+                         size=(50, 8), disabled=True, font=FONT_NORMAL)]
+        ])],
+        [sg.Button('Close', key='-CLOSE-', button_color=(COLORS['text'], COLORS['secondary']), font=FONT_NORMAL)]
+    ]
+
+    window = sg.Window('Product Traceability', layout, finalize=True, modal=True)
+    
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, '-CLOSE-'):
+            break
+    
+    window.close()
+
+def create_reports_tab():
+    today = datetime.now()
+    layout = [
+        [sg.Text('Traceability Report', font=FONT_HEADER, justification='center', expand_x=True)],
+        [sg.Frame('Report Options', [
+            [sg.Text('Date Range:', font=FONT_NORMAL)],
+            [sg.Text('From:', font=FONT_NORMAL), 
+             sg.Input(key='-START_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), font=FONT_NORMAL),
+             sg.CalendarButton('Choose', target='-START_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']), font=FONT_NORMAL)],
+            [sg.Text('To:', font=FONT_NORMAL), 
+             sg.Input(key='-END_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), font=FONT_NORMAL),
+             sg.CalendarButton('Choose', target='-END_DATE-', format='%Y-%m-%d',
+                             button_color=(COLORS['text'], COLORS['primary']), font=FONT_NORMAL)],
+            [sg.Text('Department:', font=FONT_NORMAL),
+             sg.Combo(['All', 'Butchery', 'Bakery', 'HMR'], default_value='All', key='-REPORT_DEPT-', 
+                     size=(20,1), font=FONT_NORMAL)],
+            [sg.Text('Product Code:', font=FONT_NORMAL),
+             sg.Input(key='-REPORT_PRODUCT_CODE-', size=(20,1), font=FONT_NORMAL)],
+            [sg.Button('Generate Report', key='-GENERATE_REPORT-', 
+                      button_color=(COLORS['text'], COLORS['primary']), font=FONT_NORMAL)]
+        ])],
+        [sg.Frame('Report Preview', [
+            [sg.Table(
+                values=[], 
+                headings=['Product Code', 'Description', 'Batch No', 'Received Date', 'Status', 
+                         'Temperature Log', 'Handling History'],
+                auto_size_columns=True,
+                justification='left',
+                num_rows=15,
+                key='-REPORT_TABLE-',
+                enable_events=True,
+                font=FONT_NORMAL
+            )]
+        ])],
+        [sg.Frame('Export Options', [
+            [sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary']), font=FONT_NORMAL),
+             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']), font=FONT_NORMAL)]
+        ])]
+    ]
+    return layout
 
 def update_inventory_table(window, inventory):
     """Update the inventory table with active (unprocessed) items."""
@@ -1349,68 +1581,134 @@ def save_barcode(barcode_data, item):
          default_filename = f"barcode_{item['Product Code']}_{timestamp}.png"
         
          # Get save location from user
-         save_path = sg.popup_get_file(
-             'Save Barcode As...', 
-             save_as=True,
-             default_extension='.png',
-             default_path=default_filename,
-             file_types=(("PNG Files", "*.png"),),
-             font=FONT_NORMAL
-         )
-        
-         if not save_path:
-             return False
+         save_path = sg.popup_get_file('Save Barcode As', save_as=True, 
+                                       file_types=(("PNG Files", "*.png"),),
+                                       default_extension='.png',
+                                       default_path=default_filename,
+                                       font=FONT_NORMAL)
+         if save_path:
+             # Ensure .png extension
+             if not save_path.lower().endswith('.png'):
+                 save_path += '.png'
             
-         # Ensure .png extension
-         if not save_path.lower().endswith('.png'):
-             save_path += '.png'
+             # Save the barcode image
+             with open(save_path, 'wb') as f:
+                 f.write(barcode_data)
             
-         # Save the barcode image
-         with open(save_path, 'wb') as f:
-             f.write(barcode_data)
-            
-         # Convert barcode data to base64 for database storage
-         barcode_base64 = base64.b64encode(barcode_data).decode()
+             # Convert barcode data to base64 for database storage
+             barcode_base64 = base64.b64encode(barcode_data).decode()
         
-         # Generate tracking ID
-         tracking_id = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
+             # Generate tracking ID
+             tracking_id = f"{item['Product Code']}-{item['Supplier Batch No']}-{timestamp}"
         
-         # Update database
-         conn = sqlite3.connect('spatrac.db')
-         cursor = conn.cursor()
+             # Update database
+             conn = sqlite3.connect('spatrac.db')
+             cursor = conn.cursor()
         
-         cursor.execute('''
-             UPDATE received_products 
-             SET tracking_id = ?, barcode_image = ?
-             WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
-         ''', (tracking_id, barcode_base64, item['Product Code'], item['Supplier Batch No']))
+             cursor.execute('''
+                 UPDATE received_products 
+                 SET tracking_id = ?, barcode_image = ?
+                 WHERE product_code = ? AND supplier_batch = ? AND status = 'Active'
+             ''', (tracking_id, barcode_base64, item['Product Code'], item['Supplier Batch No']))
         
-         conn.commit()
-         conn.close()
+             conn.commit()
+             conn.close()
         
-         # Update the item dictionary
-         item['tracking_id'] = tracking_id
-         item['barcode_image'] = barcode_base64
+             # Update the item dictionary
+             item['tracking_id'] = tracking_id
+             item['barcode_image'] = barcode_base64
         
-         return True
+             return True
         
      except Exception as e:
          sg.popup_error(f'Error saving barcode: {str(e)}', font=FONT_NORMAL)
          return False
 
-def save_as_pdf(report, filename):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Courier", size=10)
-    
-    # Split content into lines and write to PDF
-    lines = report.split('\n')
-    for line in lines:
-        # Remove any special characters used for formatting in the preview
-        clean_line = line.replace('║', '|').replace('╔', '+').replace('╚', '+').replace('─', '-')
-        pdf.cell(0, 5, txt=clean_line, ln=True)
-    
-    pdf.output(filename)
+def save_as_pdf(report_data, filename):
+    """
+    Save report data as PDF.
+    Args:
+        report_data: List of dictionaries containing report data
+        filename: Output PDF filename
+    """
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Courier", size=10)
+        
+        # Define column headers and widths
+        headers = ['Product Code', 'Description', 'Batch No', 'Received Date', 'Status', 'Department']
+        col_widths = [30, 60, 30, 30, 20, 20]
+        
+        # Calculate line height
+        line_height = pdf.font_size * 1.5
+        
+        # Draw headers
+        x_pos = pdf.l_margin
+        for i, header in enumerate(headers):
+            pdf.set_x(x_pos)
+            pdf.cell(col_widths[i], line_height, header, border=1)
+            x_pos += col_widths[i]
+        pdf.ln()
+        
+        # Draw data rows
+        for item in report_data:
+            x_pos = pdf.l_margin
+            max_height = line_height
+            
+            # Calculate maximum height needed for this row
+            for i, header in enumerate(headers):
+                if header == 'Product Code':
+                    content = str(item.get('Product Code', ''))
+                elif header == 'Description':
+                    content = str(item.get('Product Description', ''))
+                elif header == 'Batch No':
+                    content = str(item.get('Supplier Batch No', ''))
+                elif header == 'Received Date':
+                    content = str(item.get('Received Date', ''))
+                elif header == 'Status':
+                    content = str(item.get('Status', ''))
+                elif header == 'Department':
+                    content = str(item.get('Department', ''))
+                    
+                # Get height needed for this content
+                content_width = pdf.get_string_width(content)
+                needed_height = (content_width / col_widths[i] + 1) * line_height
+                max_height = max(max_height, needed_height)
+            
+            # Draw the row with calculated height
+            x_pos = pdf.l_margin
+            for i, header in enumerate(headers):
+                if header == 'Product Code':
+                    content = str(item.get('Product Code', ''))
+                elif header == 'Description':
+                    content = str(item.get('Product Description', ''))
+                elif header == 'Batch No':
+                    content = str(item.get('Supplier Batch No', ''))
+                elif header == 'Received Date':
+                    content = str(item.get('Received Date', ''))
+                elif header == 'Status':
+                    content = str(item.get('Status', ''))
+                elif header == 'Department':
+                    content = str(item.get('Department', ''))
+                    
+                pdf.set_x(x_pos)
+                pdf.multi_cell(col_widths[i], line_height, content, border=1)
+                x_pos += col_widths[i]
+                
+                # Move back up to stay on the same line
+                pdf.set_y(pdf.get_y() - max_height)
+            
+            # Move to next line after drawing the row
+            pdf.set_y(pdf.get_y() + max_height)
+        
+        pdf.output(filename)
+        return True
+        
+    except Exception as e:
+        print(f"DEBUG: Error saving PDF: {str(e)}")
+        sg.popup_error(f'Error saving PDF: {str(e)}', font=FONT_NORMAL)
+        return False
 
 def save_as_csv(report, filename):
     with open(filename, 'w', newline='') as file:
@@ -1440,7 +1738,14 @@ def initialize_database():
             processed_by TEXT,
             processing_date TEXT,
             tracking_id TEXT,
-            barcode_image TEXT
+            barcode_image TEXT,
+            department_manager TEXT,
+            supplier_name TEXT,
+            supplier_address TEXT,
+            country_of_origin TEXT,
+            packaging_type TEXT,
+            food_handler_name TEXT,
+            packaging_batch_code TEXT
         )
     ''')
 
@@ -1489,7 +1794,14 @@ def initialize_database():
         'processed_by': 'TEXT',
         'processing_date': 'TEXT',
         'tracking_id': 'TEXT',
-        'barcode_image': 'TEXT'
+        'barcode_image': 'TEXT',
+        'department_manager': 'TEXT',
+        'supplier_name': 'TEXT',
+        'supplier_address': 'TEXT',
+        'country_of_origin': 'TEXT',
+        'packaging_type': 'TEXT',
+        'food_handler_name': 'TEXT',
+        'packaging_batch_code': 'TEXT'
     }
     
     for col_name, col_type in required_columns.items():
@@ -1534,8 +1846,8 @@ def add_received_product(product, auth_system, window=None):
                 supplier_batch, sell_by_date, status,
                 received_date, received_by, handling_history,
                 temperature_log, department, tracking_id,
-                barcode_image
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                barcode_image, department_manager, supplier_name, supplier_address, country_of_origin, packaging_type, food_handler_name, packaging_batch_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
@@ -1550,7 +1862,14 @@ def add_received_product(product, auth_system, window=None):
             json.dumps(product['Temperature Log']),
             product['Department'],
             str(uuid.uuid4()),  # tracking_id
-            ''  # barcode_image
+            '',  # barcode_image
+            user_info['username'],  # department_manager
+            'Supplier Name',  # supplier_name
+            'Supplier Address',  # supplier_address
+            'Country of Origin',  # country_of_origin
+            'Packaging Type',  # packaging_type
+            user_info['username'],  # food_handler_name
+            product['Supplier Batch No']  # packaging_batch_code
         ))
         
         # Get the ID of the newly inserted product
@@ -1590,7 +1909,14 @@ def get_department_inventory(department):
                    COALESCE(tracking_id, '') as tracking_id,
                    COALESCE(barcode_image, '') as barcode_image,
                    COALESCE(processed_by, '') as processed_by,
-                   COALESCE(processing_date, '') as processing_date
+                   COALESCE(processing_date, '') as processing_date,
+                   COALESCE(department_manager, '') as department_manager,
+                   COALESCE(supplier_name, '') as supplier_name,
+                   COALESCE(supplier_address, '') as supplier_address,
+                   COALESCE(country_of_origin, '') as country_of_origin,
+                   COALESCE(packaging_type, '') as packaging_type,
+                   COALESCE(food_handler_name, '') as food_handler_name,
+                   COALESCE(packaging_batch_code, '') as packaging_batch_code
             FROM received_products
             WHERE department = ? AND status = 'Active'
             ORDER BY received_date DESC
@@ -1640,6 +1966,15 @@ def get_department_inventory(department):
             item['Processed By'] = item.pop('processed_by', '')
             item['Processing Date'] = item.pop('processing_date', '')
             
+            # Add additional fields
+            item['Department Manager'] = item.pop('department_manager', '')
+            item['Supplier Name'] = item.pop('supplier_name', '')
+            item['Supplier Address'] = item.pop('supplier_address', '')
+            item['Country of Origin'] = item.pop('country_of_origin', '')
+            item['Packaging Type'] = item.pop('packaging_type', '')
+            item['Food Handler Name'] = item.pop('food_handler_name', '')
+            item['Packaging Batch Code'] = item.pop('packaging_batch_code', '')
+            
             inventory.append(item)
         
         return inventory
@@ -1677,31 +2012,28 @@ def create_database_management_tab():
     layout = [
         [sg.Text('Database Management', font=FONT_HEADER, justification='center', expand_x=True)],
         [sg.Frame('Search Records', [
-            [sg.Text('Date Range:')],
-            [sg.Text('From:'), 
+            [sg.Text('Date Range:', font=FONT_NORMAL)],
+            [sg.Text('From:', font=FONT_NORMAL), 
              sg.Input(key='-DB-START-DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), enable_events=True),
              sg.CalendarButton('Choose', target='-DB-START-DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']), key='-DB-START-CAL-'),
-             sg.Text('To:'), 
+             sg.Text('To:', font=FONT_NORMAL), 
              sg.Input(key='-DB-END-DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d'), enable_events=True),
              sg.CalendarButton('Choose', target='-DB-END-DATE-', format='%Y-%m-%d',
                              button_color=(COLORS['text'], COLORS['primary']), key='-DB-END-CAL-')],
-            [sg.Text('Department:'), 
+            [sg.Text('Department:', font=FONT_NORMAL),
              sg.Combo(['All', 'Butchery', 'Bakery', 'HMR'], default_value='All', key='-DB-DEPT-', size=(20,1))],
-            [sg.Text('Status:'),
+            [sg.Text('Status:', font=FONT_NORMAL),
              sg.Combo(['All', 'Active', 'Processed'], default_value='All', key='-DB-STATUS-', size=(20,1))],
-            [sg.Text('Product Code:'), sg.Input(key='-DB-PRODUCT-CODE-', size=(20,1))],
+            [sg.Text('Product Code:', font=FONT_NORMAL), sg.Input(key='-DB-PRODUCT-CODE-', size=(20,1))],
             [sg.Button('Search', key='-DB-SEARCH-', button_color=(COLORS['text'], COLORS['primary']))]
         ])],
         [sg.Frame('Results', [
-            [sg.Table(
-                values=[], 
-                headings=['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'],
-                auto_size_columns=True,
-                justification='left',
-                num_rows=10,
-                key='-DB-TABLE-',
-                enable_events=True)
-            ]
+            [sg.Table(values=[], 
+                     headings=['Date', 'Product', 'Current Dept', 'Quantity', 'Status', 'Batch', 'Description', 'Processed By', 'Processing Date'],
+                     key='-DB-TABLE-',
+                     auto_size_columns=True,
+                     enable_events=True,
+                     num_rows=10)]
         ])],
         [sg.Frame('Actions', [
             [sg.Button('Export to CSV', key='-DB-EXPORT-CSV-', button_color=(COLORS['text'], COLORS['primary'])),
@@ -1735,7 +2067,14 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                     processing_date,
                     handling_history,
                     tracking_id,
-                    barcode_image
+                    barcode_image,
+                    department_manager,
+                    supplier_name,
+                    supplier_address,
+                    country_of_origin,
+                    packaging_type,
+                    food_handler_name,
+                    packaging_batch_code
                 FROM received_products
                 WHERE 1=1
             '''
@@ -1811,7 +2150,7 @@ def handle_database_management_events(event, values, window, inventory, auth_sys
                 
                 # Date Range
                 pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, f"Date Range: {values['-DB-START-DATE-']} to {values['-DB-END-DATE-']}", ln=True)
+                pdf.cell(0, 10, txt=f"Date Range: {values['-DB-START-DATE-']} to {values['-DB-END-DATE-']}", ln=True)
                 pdf.ln(5)
                 
                 # Results
@@ -1887,434 +2226,41 @@ def load_final_products(department):
     except FileNotFoundError:
         return []    
 
-def create_reports_tab():
-    today = datetime.now()
-    layout = [
-        [sg.Text('Reports', font=FONT_HEADER, justification='center', expand_x=True)],
-        [sg.Frame('Report Options', [
-            [sg.Text('Report Type:'),
-             sg.Combo(['Inventory Summary', 'Traceability Report'], 
-                     default_value='Inventory Summary', key='-REPORT_TYPE-', size=(20,1))],
-            [sg.Text('Date Range:')],
-            [sg.Text('From:'), 
-             sg.Input(key='-START_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Choose', target='-START_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Text('To:'), 
-             sg.Input(key='-END_DATE-', size=(20,1), default_text=today.strftime('%Y-%m-%d')),
-             sg.CalendarButton('Choose', target='-END_DATE-', format='%Y-%m-%d', button_color=(COLORS['text'], COLORS['primary']))],
-            [sg.Button('Generate Report', key='-GENERATE_REPORT-', button_color=(COLORS['text'], COLORS['primary']))]
-        ])],
-        [sg.Frame('Report Preview', [
-            [sg.Multiline(size=(80, 20), key='-REPORT_PREVIEW-', disabled=True)]
-        ])],
-        [sg.Frame('Export Options', [
-            [sg.Button('Save as PDF', key='-SAVE_PDF-', button_color=(COLORS['text'], COLORS['secondary'])),
-             sg.Button('Save as CSV', key='-SAVE_CSV-', button_color=(COLORS['text'], COLORS['secondary']))]
-        ])]
-    ]
-    return layout
-
-def save_report_as_pdf(filename, report_data, report_type, start_date, end_date, auth_system):
-    """Save the report as a PDF file."""
-    try:
-        pdf = FPDF()
-        pdf.add_page()
-        
-        # Header
-        pdf.set_font("Arial", "B", 16)
-        pdf.cell(0, 10, f"SPATRAC - {report_type}", ln=True, align='C')
-        pdf.ln(5)
-        
-        # User Info
-        user_info = auth_system.get_current_user_info()
-        pdf.set_font("Arial", "", 12)
-        pdf.cell(0, 8, f"Department: {user_info['department']}", ln=True)
-        pdf.cell(0, 8, f"Generated by: {user_info['username']} ({user_info['role']} - {user_info['department']}) - {user_info['department']}", ln=True)
-        pdf.cell(0, 8, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
-        pdf.cell(0, 8, f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}", ln=True)
-        pdf.ln(10)
-        
-        if report_type == 'Inventory Summary':
-            # Summary Statistics
-            total_items = len(report_data)
-            unique_products = len(set(item.get('Product Code', '') for item in report_data))
-            total_quantity = sum(float(item.get('Quantity', 0)) for item in report_data)
-            
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "Summary Statistics", ln=True)
-            pdf.set_font("Arial", "", 12)
-            pdf.cell(0, 8, f"Total Unique Products: {unique_products}", ln=True)
-            pdf.cell(0, 8, f"Total Items: {total_items}", ln=True)
-            pdf.cell(0, 8, f"Total Quantity: {total_quantity}", ln=True)
-            pdf.ln(10)
-            
-            # Detailed Inventory
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "Detailed Inventory", ln=True)
-            pdf.set_font("Arial", "", 12)
-            
-            # Group items by product code
-            product_groups = {}
-            for item in report_data:
-                code = item.get('Product Code', 'N/A')
-                if code not in product_groups:
-                    product_groups[code] = {
-                        'description': item.get('Description', 'N/A'),
-                        'quantity': 0,
-                        'unit': item.get('Unit', 'N/A')
-                    }
-                product_groups[code]['quantity'] += float(item.get('Quantity', 0))
-            
-            for code, data in product_groups.items():
-                pdf.cell(0, 8, f"Product Code: {code}", ln=True)
-                pdf.cell(0, 8, f"Description: {data['description']}", ln=True)
-                pdf.cell(0, 8, f"Total Quantity: {data['quantity']} {data['unit']}", ln=True)
-                pdf.ln(5)
-                
-        elif report_type == 'Traceability Report':
-            pdf.set_font("Arial", "B", 14)
-            pdf.cell(0, 10, "Traceability Details", ln=True)
-            
-            for item in report_data:
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, "Product Information", ln=True)
-                pdf.set_font("Arial", "", 12)
-                pdf.cell(0, 8, f"• Code: {item.get('Product Code', 'N/A')}", ln=True)
-                pdf.cell(0, 8, f"• Description: {item.get('Description', 'N/A')}", ln=True)
-                pdf.cell(0, 8, f"• Batch: {item.get('Supplier Batch', 'N/A')}", ln=True)
-                pdf.cell(0, 8, f"• Sell By: {item.get('Sell By Date', 'N/A')}", ln=True)
-                
-                pdf.ln(5)
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, "Tracking Information", ln=True)
-                pdf.set_font("Arial", "", 12)
-                pdf.cell(0, 8, f"• Received: {item.get('Received Date', 'N/A')}", ln=True)
-                pdf.cell(0, 8, f"• Received By: {item.get('Received By', 'N/A')}", ln=True)
-                pdf.cell(0, 8, f"• Status: {item.get('Status', 'N/A')}", ln=True)
-                pdf.ln(10)
-        
-        # Footer
-        pdf.set_font("Arial", "I", 10)
-        pdf.cell(0, 10, "Report End", ln=True, align='C')
-        pdf.cell(0, 10, "Generated by SPATRAC System", ln=True, align='C')
-        pdf.cell(0, 10, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), ln=True, align='C')
-        
-        pdf.output(filename)
-        return True
-    except Exception as e:
-        raise Exception(f"Error creating PDF: {str(e)}")
-
-def save_report_as_csv(filename, report_data, report_type, start_date, end_date, auth_system):
-    try:
-        user_info = auth_system.get_current_user_info()
-        
-        with open(filename, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            
-            # Write header rows
-            writer.writerow(['SPATRAC - ' + report_type])
-            writer.writerow(['Department: ' + user_info['department']])
-            writer.writerow(['Generated by: ' + user_info['username'] + ' (' + user_info['role'] + ')'])
-            writer.writerow(['Date: ' + datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-            writer.writerow(['Period: ' + start_date.strftime('%Y-%m-%d') + ' to ' + end_date.strftime('%Y-%m-%d')])
-            writer.writerow([])  # Empty row for spacing
-            
-            if report_type == 'Inventory Summary':
-                # Calculate summary statistics
-                total_items = len(report_data)
-                unique_products = len(set(item.get('Product Code', '') for item in report_data))
-                total_quantity = sum(float(item.get('Quantity', 0)) for item in report_data)
-                
-                # Write summary statistics
-                writer.writerow(['Summary Statistics'])
-                writer.writerow(['Total Unique Products', unique_products])
-                writer.writerow(['Total Items', total_items])
-                writer.writerow(['Total Quantity', total_quantity])
-                writer.writerow([])  # Empty row for spacing
-                
-                # Write detailed inventory
-                writer.writerow(['Detailed Inventory'])
-                writer.writerow(['Product Code', 'Description', 'Quantity', 'Unit'])
-                
-                # Group items by product code
-                product_groups = {}
-                for item in report_data:
-                    code = item.get('Product Code', 'N/A')
-                    if code not in product_groups:
-                        product_groups[code] = {
-                            'description': item.get('Description', 'N/A'),
-                            'quantity': 0,
-                            'unit': item.get('Unit', 'N/A')
-                        }
-                    product_groups[code]['quantity'] += float(item.get('Quantity', 0))
-                
-                for code, data in product_groups.items():
-                    writer.writerow([
-                        code,
-                        data['description'],
-                        data['quantity'],
-                        data['unit']
-                    ])
-                    
-            elif report_type == 'Traceability Report':
-                writer.writerow(['Traceability Details'])
-                writer.writerow(['Product Code', 'Description', 'Batch', 'Sell By', 'Received Date', 'Received By', 'Status'])
-                
-                for item in report_data:
-                    writer.writerow([
-                        item.get('Product Code', 'N/A'),
-                        item.get('Description', 'N/A'),
-                        item.get('Supplier Batch', 'N/A'),
-                        item.get('Sell By Date', 'N/A'),
-                        item.get('Received Date', 'N/A'),
-                        item.get('Received By', 'N/A'),
-                        item.get('Status', 'N/A')
-                    ])
-            
-            # Write footer
-            writer.writerow([])  # Empty row for spacing
-            writer.writerow(['Report End'])
-            writer.writerow(['Generated by SPATRAC System'])
-            writer.writerow([datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-            
-        return True
-    except Exception as e:
-        raise Exception(f"Error saving CSV: {str(e)}")
-
-def format_report_for_display(report_data, report_type, auth_system):
-    """Format the report data for display in the GUI."""
-    user_info = auth_system.get_current_user_info()
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    header = f"""
-SPATRAC {report_type}
-─────────────────────────────────────────────────────────────────
-Generated by: {user_info['username']}
-Department: {user_info['department']}
-Date: {current_time}
-─────────────────────────────────────────────────────────────────
-
-"""
-    
-    if report_type == 'Inventory Summary':
-        body = ""
-        for item in report_data:
-            body += f"""
-Product Code: {item.get('Product Code', 'N/A')}
-Name: {item.get('Name', 'N/A')}
-Quantity: {item.get('Quantity', 'N/A')}
-Status: {item.get('Status', 'N/A')}
-─────────────────────────────────────────────────────────────────"""
-    
-    elif report_type == 'Traceability Report':
-        body = ""
-        for item in report_data:
-            body += f"""
-Product Code: {item.get('Product Code', 'N/A')}
-Description: {item.get('Description', 'N/A')}
-Supplier Batch: {item.get('Supplier Batch', 'N/A')}
-Sell By Date: {item.get('Sell By Date', 'N/A')}
-Received Date: {item.get('Received Date', 'N/A')}
-Received By: {item.get('Received By', 'N/A')}
-Status: {item.get('Status', 'N/A')}
-─────────────────────────────────────────────────────────────────"""
-    
-    footer = f"""
-
-Report End
-Generated by SPATRAC System
-{current_time}
-"""
-    
-    return header + body + footer
-
-def show_product_details(product, auth_system):
-    """Display detailed product information including barcode."""
-    if not product:
-        sg.popup_error('No product selected', font=FONT_NORMAL)
-        return
-        
-    # Convert barcode image from base64 if available
-    barcode_image_path = None
-    if product.get('barcode_image'):
-        try:
-            barcode_data = base64.b64decode(product['barcode_image'])
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-                temp_file.write(barcode_data)
-                barcode_image_path = temp_file.name
-        except Exception as e:
-            print(f"Error loading barcode image: {e}")
-            
-    # Create the layout
-    layout = [
-        [sg.Text('Product Details', font=('Helvetica', 12, 'bold'))],
-        [sg.Text(f"Product Code: {product['Product Code']}")],
-        [sg.Text(f"Description: {product['Product Description']}")],
-        [sg.Text(f"Supplier Batch: {product.get('Supplier Batch No', 'N/A')}")],
-        [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
-        [sg.Text(f"Status: {product.get('Status', 'N/A')}")],
-    ]
-    
-    # Add barcode section if available
-    if product.get('tracking_id'):
-        layout.extend([
-            [sg.Text('Barcode Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Barcode Data: {product['tracking_id']}")],
-        ])
-        if barcode_image_path:
-            layout.append([sg.Image(barcode_image_path, size=(300, 100))])
-    
-    # Add processing information if available
-    if product.get('processed_by'):
-        layout.extend([
-            [sg.Text('Processing Information', font=('Helvetica', 10, 'bold'))],
-            [sg.Text(f"Processed By: {product['processed_by']}")],
-            [sg.Text(f"Processing Date: {product.get('processing_date', 'N/A')}")],
-        ])
-    
-    temperature_log = product.get('Temperature Log', ['No temperature log available'])
-    # Ensure all entries in temperature_log are strings
-    temperature_log = [str(entry) for entry in temperature_log]  # Convert dicts to strings if necessary
-    
-    layout.extend([
-        [sg.Text('Handling History:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline(product.get('Handling History', 'No handling history available'), size=(60, 5), disabled=True)],
-        [sg.Text('Temperature Log:', font=('Helvetica', 10, 'bold'))],
-        [sg.Multiline('\n'.join(temperature_log), size=(60, 3), disabled=True)],
-        [sg.Button('Close', font=FONT_NORMAL)]
-    ])
-    
-    details_window = sg.Window('Product Details', layout, modal=True, finalize=True)
-    
-    # Center the window on screen
-    details_window.move(details_window.current_location()[0], 0)
-    
-    while True:
-        event, _ = details_window.read()
-        if event in (sg.WIN_CLOSED, 'Close'):
-            if barcode_image_path and os.path.exists(barcode_image_path):
-                try:
-                    os.unlink(barcode_image_path)
-                except Exception as e:
-                    print(f"Error removing temporary barcode file: {e}")
-            break
-            
-    details_window.close()
-
-def format_temperature_log(temp_log):
-    """Format temperature log entries for display."""
-    if not temp_log or not isinstance(temp_log, list):
-        return 'No temperature readings available'
-        
-    formatted_entries = []
-    for entry in temp_log:
-        if isinstance(entry, dict):
-            formatted_entries.append(
-                f"{entry.get('timestamp', 'N/A')} - {entry.get('temperature', 'N/A')}°C at {entry.get('location', 'N/A')}"
-            )
-        else:
-            formatted_entries.append(str(entry))
-            
-    return '\n'.join(formatted_entries) if formatted_entries else 'No temperature readings available'
-
-def generate_inventory_summary(inventory, start_date, end_date, auth_system):
-    """Generate an inventory summary report for the specified date range."""
-    try:
-        if not auth_system or not auth_system.get_current_user_info():
-            raise ValueError("User not authenticated")
-            
-        # Filter inventory by date range
-        filtered_inventory = [
-            item for item in inventory 
-            if start_date.date() <= datetime.strptime(item.get('Received Date', '1900-01-01 00:00:00'), '%Y-%m-%d %H:%M:%S').date() <= end_date.date()
-        ]
-        
-        return filtered_inventory
-    except Exception as e:
-        raise Exception(f"Error generating inventory summary: {str(e)}")
-
-def generate_traceability_report(inventory, start_date, end_date, auth_system):
-    """Generate a traceability report for the specified date range."""
-    try:
-        if not auth_system or not auth_system.get_current_user_info():
-            raise ValueError("User not authenticated")
-            
-        logging.info('Starting traceability report generation.')
-
-        # Filter inventory by date range
-        filtered_inventory = [
-            item for item in inventory 
-            if start_date.date() <= datetime.strptime(item.get('Received Date', ''), '%Y-%m-%d %H:%M:%S').date() <= end_date.date()
-        ]
-        logging.info(f'Filtered inventory: {filtered_inventory}')
-
-        # Sort by received date for better traceability
-        filtered_inventory.sort(key=lambda x: datetime.strptime(x.get('Received Date', ''), '%Y-%m-%d %H:%M:%S'), reverse=True)
-
-        # Enhance each item with handling history if available
-        for item in filtered_inventory:
-            if isinstance(item.get('Handling History', ''), list):
-                item['Handling History'] = '\n'.join(item['Handling History'])
-            if isinstance(item.get('Temperature Log', ''), list):
-                item['Temperature Log'] = '\n'.join(item['Temperature Log'])
-        
-        logging.info('Traceability report generated successfully.')
-        return filtered_inventory
-    except Exception as e:
-        logging.error(f'Error generating traceability report: {e}')
-        raise
-
-def delete_all_active_products():
-    """Delete all active products from the database."""
-    try:
-        conn = sqlite3.connect('spatrac.db')
-        cursor = conn.cursor()
-        
-        # Get count of active products before deletion
-        cursor.execute('SELECT COUNT(*) FROM received_products WHERE status = ?', ('Active',))
-        count = cursor.fetchone()[0]
-        
-        if count == 0:
-            return False, "No active products found to delete"
-        
-        # Delete all products with 'Active' status
-        cursor.execute('DELETE FROM received_products WHERE status = ?', ('Active',))
-        
-        # Commit and close
-        conn.commit()
-        conn.close()
-        
-        return True, f"Successfully deleted {count} active products"
-    except Exception as e:
-        print(f"Error deleting active products: {e}")
-        return False, f"Error deleting active products: {str(e)}"
-
 def create_relationships_between_ingredients_and_received_products(conn):
-    # Fetch ingredients and received products
-    ingredients_df = fetch_ingredients(conn)
-    received_products_df = fetch_received_products(conn)
-
-    relationships = []
-
-    # Iterate over received products and check for matching ingredients
-    for _, received_product in received_products_df.iterrows():
-        received_product_code = received_product['Product Code']
-        # Check if the received product code matches any ingredient code
-        matching_ingredients = ingredients_df[ingredients_df['Ingredient Prod Code'] == received_product_code]
+    """
+    Create relationships between ingredients and received products.
+    """
+    try:
+        # Fetch ingredients and received products
+        ingredients = fetch_ingredients(conn)
+        received_products = fetch_received_products(conn)
         
-        # If matches are found, create relationships
-        for _, ingredient in matching_ingredients.iterrows():
-            relationship = {
-                'Final Product Code': ingredient['Final Product Code'],
-                'Final Product Name': ingredient['Final Product Name'],
-                'Ingredient Prod Code': ingredient['Ingredient Prod Code'],
-                'Ingredient Description': ingredient['Ingredient Description'],
-                'Received Product Code': received_product_code,
-                'Received Product Description': received_product['Product Description']
-            }
-            relationships.append(relationship)
-
-    return relationships
+        relationships = []
+        
+        # Convert received_products to list of dicts if it's a DataFrame
+        if isinstance(received_products, pd.DataFrame):
+            received_products = received_products.to_dict('records')
+            
+        # Convert ingredients to list of dicts if it's a DataFrame
+        if isinstance(ingredients, pd.DataFrame):
+            ingredients = ingredients.to_dict('records')
+        
+        for received_product in received_products:
+            for ingredient in ingredients:
+                if received_product.get('Product Code') == ingredient.get('code'):
+                    relationship = {
+                        'ingredient_code': ingredient.get('code'),
+                        'ingredient_name': ingredient.get('name'),
+                        'received_product_code': received_product.get('Product Code'),
+                        'received_product_desc': received_product.get('Product Description')
+                    }
+                    relationships.append(relationship)
+        
+        return relationships
+        
+    except Exception as e:
+        print(f"Error creating relationships: {str(e)}")
+        return []
 
 def fetch_ingredients(conn):
     cursor = conn.cursor()
@@ -2420,6 +2366,422 @@ def notify_matching_recipes(product, matching_recipes, window=None):
         sg.popup("Recipe Matches Found", notification, title="Recipe Information")
     else:
         print(notification)
+
+def generate_traceability_report(inventory, start_date, end_date, auth_system):
+    """
+    Generate a traceability report for items within the specified date range.
+    """
+    print(f"DEBUG: Starting report generation with date range: {start_date} to {end_date}")
+    print(f"DEBUG: Inventory type: {type(inventory)}")
+    print(f"DEBUG: Inventory size: {len(inventory) if inventory else 'None'}")
+    print("DEBUG: First few inventory items:")
+    for i, item in enumerate(inventory[:3]):  # Print first 3 items for inspection
+        print(f"DEBUG: Item {i}:")
+        print(f"  - Product Code: {item.get('Product Code')}")
+        print(f"  - Description: {item.get('Product Description')}")
+        print(f"  - Delivery Date: {item.get('Delivery Date')}")
+        print(f"  - All keys: {list(item.keys())}")
+    
+    report_data = []
+    
+    if not inventory:
+        print("DEBUG: Inventory is empty or None")
+        return report_data
+        
+    for index, item in enumerate(inventory):
+        try:
+            print(f"\nDEBUG: Processing item {index}: {item.get('Product Code', 'No Code')}")
+            delivery_date_str = item.get('Delivery Date', '')
+            print(f"DEBUG: Delivery date string: {delivery_date_str}")
+            
+            if not delivery_date_str:
+                print(f"DEBUG: No delivery date for item {index}")
+                continue
+                
+            try:
+                # Try different datetime formats with time components
+                try:
+                    delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    try:
+                        delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d %H:%M')
+                    except ValueError:
+                        try:
+                            delivery_date = datetime.strptime(delivery_date_str, '%Y-%m-%d')
+                        except ValueError:
+                            print(f"DEBUG: Could not parse date {delivery_date_str} in any format")
+                            continue
+                
+                print(f"DEBUG: Parsed delivery date: {delivery_date}")
+                
+                # Compare only the date parts
+                delivery_date = delivery_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                print(f"DEBUG: Comparing dates: {start_date} <= {delivery_date} <= {end_date}")
+                print(f"DEBUG: Date comparison result: {start_date <= delivery_date <= end_date}")
+                
+            except ValueError as date_error:
+                print(f"DEBUG: Date parsing error for item {index} - {date_error}")
+                continue
+                
+            if start_date <= delivery_date <= end_date:
+                print(f"DEBUG: Item {index} is within date range")
+                
+                # Parse handling history for food handler names
+                handling_history = item.get('Handling History', [])
+                if isinstance(handling_history, str):
+                    handling_history = handling_history.split('\n') if handling_history else []
+                
+                food_handlers = []
+                for entry in handling_history:
+                    if 'handled by' in entry.lower():
+                        handler = entry.split('handled by')[-1].strip()
+                        food_handlers.append(handler)
+                
+                # Create report item with audit schema fields
+                report_item = {
+                    'Product Code': item.get('Product Code', ''),
+                    'Product Description': item.get('Product Description', ''),
+                    'Product Name': item.get('Product Description', ''),  # For audit schema
+                    'Supplier Batch No': item.get('Supplier Batch No', ''),
+                    'Packaging Batch Code': item.get('Supplier Batch No', ''),  # For audit schema
+                    'Received Date': delivery_date_str,
+                    'Sell By Date': item.get('Sell By Date', ''),
+                    'Status': item.get('Status', ''),
+                    'Department': item.get('Department', ''),
+                    'Department Manager': item.get('Department Manager', ''),
+                    'Food Handler Names': food_handlers,
+                    'Temperature Log': item.get('Temperature Log', []),
+                    'Handling History': handling_history,
+                    'Received By': item.get('Received By', ''),
+                    'Processed By': item.get('Processed By', ''),
+                    'Processing Date': item.get('Processing Date', ''),
+                    'Tracking ID': item.get('Tracking ID', '')
+                }
+                
+                # Add packaging information if available
+                packaging_info = {
+                    'Supplier Name': item.get('Supplier Name', ''),
+                    'Supplier Address': item.get('Supplier Address', ''),
+                    'Packaging Type': item.get('Packaging Type', ''),
+                    'Quantity Received': item.get('Quantity', ''),
+                    'Unit': item.get('Unit', '')
+                }
+                report_item['Packaging Info'] = packaging_info
+                
+                report_data.append(report_item)
+                print(f"DEBUG: Added item to report")
+                
+        except Exception as e:
+            print(f"DEBUG: Error processing item {index} - {e}")
+            continue
+            
+    print(f"DEBUG: Final report contains {len(report_data)} items")
+    return report_data
+
+def show_detailed_traceability(product, auth_system):
+    """Show detailed traceability information for a product."""
+    if not product:
+        return
+
+    layout = [
+        [sg.Text('Product Traceability Details', font=FONT_HEADER, justification='center')],
+        [sg.Frame('Product Information', [
+            [sg.Text(f"Product Code: {product.get('Product Code', 'N/A')}")],
+            [sg.Text(f"Description: {product.get('Product Description', 'N/A')}")],
+            [sg.Text(f"Batch Number: {product.get('Supplier Batch No', 'N/A')}")],
+            [sg.Text(f"Sell by Date: {product.get('Sell By Date', 'N/A')}")],
+        ])],
+        [sg.Frame('Temperature History', [
+            [sg.Multiline(format_temperature_log(product.get('Temperature Log', [])),
+                         size=(50, 5), disabled=True, font=FONT_NORMAL)]
+        ])],
+        [sg.Frame('Handling History', [
+            [sg.Multiline('\n'.join(product.get('Handling History', [])) if isinstance(product.get('Handling History'), list)
+                         else product.get('Handling History', 'No handling history available'),
+                         size=(50, 8), disabled=True, font=FONT_NORMAL)]
+        ])],
+        [sg.Button('Close', key='-CLOSE-', button_color=(COLORS['text'], COLORS['secondary']), font=FONT_NORMAL)]
+    ]
+
+    window = sg.Window('Product Traceability', layout, finalize=True, modal=True)
+    
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, '-CLOSE-'):
+            break
+    
+    window.close()
+
+def format_temperature_log(temp_log):
+    """
+    Format temperature log entries for display.
+    
+    Args:
+        temp_log (list): List of temperature log entries
+    
+    Returns:
+        str: Formatted temperature log string
+    """
+    if not temp_log:
+        return ''
+    
+    formatted_log = []
+    for entry in temp_log:
+        if isinstance(entry, dict):
+            timestamp = entry.get('timestamp', '')
+            temperature = entry.get('temperature', '')
+            formatted_log.append(f"{timestamp}: {temperature}°C")
+    
+    return '\n'.join(formatted_log)
+
+def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_system):
+    """
+    Save a formatted report as PDF with headers and metadata.
+    
+    Args:
+        filename: Output PDF filename
+        report_data: List of dictionaries containing report data
+        title: Report title
+        start_date: Start date of the report period
+        end_date: End date of the report period
+        auth_system: Authentication system for user info
+    """
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Add report header
+        pdf.set_font("Courier", 'B', size=16)
+        pdf.cell(0, 10, txt=title, ln=True, align='C')
+        
+        # Add metadata
+        pdf.set_font("Courier", size=10)
+        pdf.cell(0, 5, txt=f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+        pdf.cell(0, 5, txt=f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}", ln=True)
+        pdf.cell(0, 5, txt=f"Generated by: {auth_system.current_user}", ln=True)
+        pdf.ln(5)
+        
+        # Process each item
+        for item in report_data:
+            # Product Information Section
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Product Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            
+            info_lines = [
+                f"Product Code: {item.get('Product Code', '')}",
+                f"Product Name: {item.get('Product Name', '')}",
+                f"Description: {item.get('Product Description', '')}",
+                f"Department: {item.get('Department', '')}",
+                f"Status: {item.get('Status', '')}",
+                f"Tracking ID: {item.get('Tracking ID', '')}"
+            ]
+            
+            for line in info_lines:
+                pdf.cell(0, 5, txt=line, ln=True)
+            
+            # Dates and Batch Information
+            pdf.ln(5)
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Dates and Batch Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            
+            date_lines = [
+                f"Received Date: {item.get('Received Date', '')}",
+                f"Sell By Date: {item.get('Sell By Date', '')}",
+                f"Processing Date: {item.get('Processing Date', '')}",
+                f"Batch Number: {item.get('Supplier Batch No', '')}"
+            ]
+            
+            for line in date_lines:
+                pdf.cell(0, 5, txt=line, ln=True)
+            
+            # Personnel Information
+            pdf.ln(5)
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Personnel Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            
+            personnel_lines = [
+                f"Department Manager: {item.get('Department Manager', '')}",
+                f"Received By: {item.get('Received By', '')}",
+                f"Processed By: {item.get('Processed By', '')}",
+                f"Food Handlers: {', '.join(item.get('Food Handler Names', []))}"
+            ]
+            
+            for line in personnel_lines:
+                pdf.cell(0, 5, txt=line, ln=True)
+            
+            # Packaging Information
+            pdf.ln(5)
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Packaging Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            
+            packaging_info = item.get('Packaging Info', {})
+            packaging_lines = [
+                f"Supplier Name: {packaging_info.get('Supplier Name', '')}",
+                f"Supplier Address: {packaging_info.get('Supplier Address', '')}",
+                f"Packaging Type: {packaging_info.get('Packaging Type', '')}",
+                f"Quantity Received: {packaging_info.get('Quantity Received', '')} {packaging_info.get('Unit', '')}"
+            ]
+            
+            for line in packaging_lines:
+                pdf.cell(0, 5, txt=line, ln=True)
+            
+            # Temperature Log
+            if item.get('Temperature Log'):
+                pdf.ln(5)
+                pdf.set_font("Courier", 'B', size=12)
+                pdf.cell(0, 10, txt="Temperature Log", ln=True)
+                pdf.set_font("Courier", size=10)
+                
+                temp_log = item.get('Temperature Log', [])
+                if isinstance(temp_log, str):
+                    temp_log = temp_log.split('\n')
+                for log_entry in temp_log:
+                    pdf.cell(0, 5, txt=log_entry, ln=True)
+            
+            # Handling History
+            if item.get('Handling History'):
+                pdf.ln(5)
+                pdf.set_font("Courier", 'B', size=12)
+                pdf.cell(0, 10, txt="Handling History", ln=True)
+                pdf.set_font("Courier", size=10)
+                
+                history = item.get('Handling History', [])
+                if isinstance(history, str):
+                    history = history.split('\n')
+                for entry in history:
+                    pdf.cell(0, 5, txt=entry, ln=True)
+            
+            # Add a separator between items
+            pdf.ln(10)
+            pdf.cell(0, 0, "", ln=True, border='T')
+            pdf.ln(10)
+        
+        # Add footer
+        pdf.ln(10)
+        pdf.set_font("Courier", 'I', size=8)
+        pdf.cell(0, 5, txt="Generated by SPATRAC - Traceability Management System", ln=True, align='C')
+        
+        pdf.output(filename)
+        return True
+        
+    except Exception as e:
+        print(f"DEBUG: Error saving PDF report: {str(e)}")
+        sg.popup_error(f'Error saving PDF report: {str(e)}', font=FONT_NORMAL)
+        return False
+
+def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_system):
+    """
+    Save a formatted report as PDF with headers and metadata.
+    
+    Args:
+        filename: Output PDF filename
+        report_data: List of dictionaries containing report data
+        title: Report title
+        start_date: Start date of the report period
+        end_date: End date of the report period
+        auth_system: Authentication system for user info
+    """
+    try:
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Add report header
+        pdf.set_font("Courier", 'B', size=16)
+        pdf.cell(0, 10, txt=title, ln=True, align='C')
+        
+        # Add metadata
+        pdf.set_font("Courier", size=10)
+        pdf.cell(0, 5, txt=f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
+        pdf.cell(0, 5, txt=f"Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}", ln=True)
+        pdf.cell(0, 5, txt=f"Generated by: {auth_system.current_user}", ln=True)
+        pdf.ln(5)
+        
+        # Process each item
+        for item in report_data:
+            # Product Information Section
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Product Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            pdf.cell(0, 5, txt=f"Product Code: {item.get('Product Code', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Description: {item.get('Product Description', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Quantity: {item.get('Quantity', '')} {item.get('Unit', '')}", ln=True)
+            pdf.ln(5)
+            
+            # Dates and Batch Information
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Dates and Batch Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            pdf.cell(0, 5, txt=f"Received Date: {item.get('Received Date', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Sell By Date: {item.get('Sell By Date', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Supplier Batch No: {item.get('Supplier Batch No', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Packaging Batch Code: {item.get('Packaging Batch Code', '')}", ln=True)
+            pdf.ln(5)
+            
+            # Personnel Information
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Personnel Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            pdf.cell(0, 5, txt=f"Department: {item.get('Department', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Department Manager: {item.get('Department Manager', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Food Handler: {item.get('Food Handler Name', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Received By: {item.get('Received By', '')}", ln=True)
+            if item.get('Processed By'):
+                pdf.cell(0, 5, txt=f"Processed By: {item.get('Processed By', '')}", ln=True)
+                pdf.cell(0, 5, txt=f"Processing Date: {item.get('Processing Date', '')}", ln=True)
+            pdf.ln(5)
+            
+            # Supplier Information
+            pdf.set_font("Courier", 'B', size=12)
+            pdf.cell(0, 10, txt="Supplier Information", ln=True)
+            pdf.set_font("Courier", size=10)
+            pdf.cell(0, 5, txt=f"Supplier Name: {item.get('Supplier Name', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Supplier Address: {item.get('Supplier Address', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Country of Origin: {item.get('Country of Origin', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Packaging Type: {item.get('Packaging Type', '')}", ln=True)
+            pdf.ln(5)
+            
+            # Temperature Log
+            if item.get('Temperature Log'):
+                pdf.set_font("Courier", 'B', size=12)
+                pdf.cell(0, 10, txt="Temperature Log", ln=True)
+                pdf.set_font("Courier", size=10)
+                temp_log = json.loads(item['Temperature Log']) if isinstance(item['Temperature Log'], str) else item['Temperature Log']
+                for log in temp_log:
+                    pdf.cell(0, 5, txt=f"{log}", ln=True)
+                pdf.ln(5)
+            
+            # Handling History
+            if item.get('Handling History'):
+                pdf.set_font("Courier", 'B', size=12)
+                pdf.cell(0, 10, txt="Handling History", ln=True)
+                pdf.set_font("Courier", size=10)
+                history = json.loads(item['Handling History']) if isinstance(item['Handling History'], str) else item['Handling History']
+                for entry in history:
+                    pdf.cell(0, 5, txt=f"{entry}", ln=True)
+                pdf.ln(5)
+            
+            # Add a separator between items
+            pdf.cell(0, 5, txt="_" * 80, ln=True)
+            pdf.ln(10)
+        
+        # Add footer
+        pdf.set_font("Courier", 'I', size=8)
+        pdf.cell(0, 5, txt="Generated by SPATRAC - Traceability Management System", ln=True, align='C')
+        
+        pdf.output(filename)
+        return True
+        
+    except Exception as e:
+        print(f"DEBUG: Error saving PDF report: {str(e)}")
+        sg.popup_error(f'Error saving PDF report: {str(e)}', font=FONT_NORMAL)
+        return False
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
