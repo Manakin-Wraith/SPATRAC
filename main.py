@@ -2596,6 +2596,7 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
                 f"Product Code: {item.get('Product Code', '')}",
                 f"Product Name: {item.get('Product Name', '')}",
                 f"Description: {item.get('Product Description', '')}",
+                f"Quantity: {item.get('Quantity', '')} {item.get('Unit', '')}",
                 f"Department: {item.get('Department', '')}",
                 f"Status: {item.get('Status', '')}",
                 f"Tracking ID: {item.get('Tracking ID', '')}"
@@ -2614,7 +2615,8 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
                 f"Received Date: {item.get('Received Date', '')}",
                 f"Sell By Date: {item.get('Sell By Date', '')}",
                 f"Processing Date: {item.get('Processing Date', '')}",
-                f"Batch Number: {item.get('Supplier Batch No', '')}"
+                f"Batch Number: {item.get('Supplier Batch No', '')}",
+                f"Packaging Batch Code: {item.get('Packaging Batch Code', '')}"
             ]
             
             for line in date_lines:
@@ -2636,10 +2638,10 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
             for line in personnel_lines:
                 pdf.cell(0, 5, txt=line, ln=True)
             
-            # Packaging Information
+            # Supplier Information
             pdf.ln(5)
             pdf.set_font("Courier", 'B', size=12)
-            pdf.cell(0, 10, txt="Packaging Information", ln=True)
+            pdf.cell(0, 10, txt="Supplier Information", ln=True)
             pdf.set_font("Courier", size=10)
             
             packaging_info = item.get('Packaging Info', {})
@@ -2763,8 +2765,8 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
             pdf.set_font("Courier", size=10)
             pdf.cell(0, 5, txt=f"Supplier Name: {item.get('Supplier Name', '')}", ln=True)
             pdf.cell(0, 5, txt=f"Supplier Address: {item.get('Supplier Address', '')}", ln=True)
-            pdf.cell(0, 5, txt=f"Country of Origin: {item.get('Country of Origin', '')}", ln=True)
             pdf.cell(0, 5, txt=f"Packaging Type: {item.get('Packaging Type', '')}", ln=True)
+            pdf.cell(0, 5, txt=f"Quantity Received: {item.get('Quantity Received', '')} {item.get('Unit', '')}", ln=True)
             pdf.ln(5)
             
             # Temperature Log
