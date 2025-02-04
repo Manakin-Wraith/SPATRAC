@@ -1330,8 +1330,7 @@ def create_reports_tab():
             [sg.Text('Department:', font=FONT_NORMAL),
              sg.Combo(['All', 'Butchery', 'Bakery', 'HMR'], default_value='All', key='-REPORT_DEPT-', 
                      size=(20,1), font=FONT_NORMAL)],
-            [sg.Text('Product Code:', font=FONT_NORMAL),
-             sg.Input(key='-REPORT_PRODUCT_CODE-', size=(20,1), font=FONT_NORMAL)],
+            [sg.Text('Product Code:', font=FONT_NORMAL), sg.Input(key='-REPORT_PRODUCT_CODE-', size=(20,1), font=FONT_NORMAL)],
             [sg.Button('Generate Report', key='-GENERATE_REPORT-', 
                       button_color=(COLORS['text'], COLORS['primary']), font=FONT_NORMAL)]
         ])],
@@ -1340,11 +1339,10 @@ def create_reports_tab():
                 values=[], 
                 headings=['Product Code', 'Description', 'Batch No', 'Received Date', 'Status', 
                          'Temperature Log', 'Handling History'],
-                auto_size_columns=True,
-                justification='left',
-                num_rows=15,
                 key='-REPORT_TABLE-',
+                auto_size_columns=True,
                 enable_events=True,
+                num_rows=15,
                 font=FONT_NORMAL
             )]
         ])],
@@ -1720,6 +1718,41 @@ def initialize_database():
     conn = sqlite3.connect('spatrac.db')
     cursor = conn.cursor()
     
+    # First, create a temporary table to store existing data
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS temp_recipe_ingredients AS
+        SELECT MIN(id) as id, recipe_id, ingredient_code, quantity, unit
+        FROM recipe_ingredients
+        GROUP BY recipe_id, ingredient_code
+    ''')
+    
+    # Drop the existing table
+    cursor.execute('DROP TABLE IF EXISTS recipe_ingredients')
+    
+    # Create the table with unique constraint
+    cursor.execute('''
+        CREATE TABLE recipe_ingredients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipe_id INTEGER,
+            ingredient_code TEXT,
+            quantity REAL,
+            unit TEXT,
+            FOREIGN KEY (recipe_id) REFERENCES recipes (id),
+            FOREIGN KEY (ingredient_code) REFERENCES ingredients (code),
+            UNIQUE(recipe_id, ingredient_code)
+        )
+    ''')
+    
+    # Restore the data from temporary table
+    cursor.execute('''
+        INSERT INTO recipe_ingredients (id, recipe_id, ingredient_code, quantity, unit)
+        SELECT * FROM temp_recipe_ingredients
+    ''')
+    
+    # Drop the temporary table
+    cursor.execute('DROP TABLE IF EXISTS temp_recipe_ingredients')
+    
+    # Create other tables as before...
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS received_products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1768,18 +1801,6 @@ def initialize_database():
             name TEXT NOT NULL,
             department TEXT,
             created_date TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS recipe_ingredients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            recipe_id INTEGER,
-            ingredient_code TEXT,
-            quantity REAL,
-            unit TEXT,
-            FOREIGN KEY (recipe_id) REFERENCES recipes (id),
-            FOREIGN KEY (ingredient_code) REFERENCES ingredients (code)
         )
     ''')
     
@@ -2642,8 +2663,8 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
                 temp_log = item.get('Temperature Log', [])
                 if isinstance(temp_log, str):
                     temp_log = temp_log.split('\n')
-                for log_entry in temp_log:
-                    pdf.cell(0, 5, txt=log_entry, ln=True)
+                for log in temp_log:
+                    pdf.cell(0, 5, txt=log, ln=True)
             
             # Handling History
             if item.get('Handling History'):
@@ -2659,8 +2680,7 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
                     pdf.cell(0, 5, txt=entry, ln=True)
             
             # Add a separator between items
-            pdf.ln(10)
-            pdf.cell(0, 0, "", ln=True, border='T')
+            pdf.cell(0, 5, txt="_" * 80, ln=True)
             pdf.ln(10)
         
         # Add footer
@@ -2752,26 +2772,31 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
                 pdf.set_font("Courier", 'B', size=12)
                 pdf.cell(0, 10, txt="Temperature Log", ln=True)
                 pdf.set_font("Courier", size=10)
-                temp_log = json.loads(item['Temperature Log']) if isinstance(item['Temperature Log'], str) else item['Temperature Log']
+                
+                temp_log = item.get('Temperature Log', [])
+                if isinstance(temp_log, str):
+                    temp_log = temp_log.split('\n')
                 for log in temp_log:
-                    pdf.cell(0, 5, txt=f"{log}", ln=True)
-                pdf.ln(5)
+                    pdf.cell(0, 5, txt=log, ln=True)
             
             # Handling History
             if item.get('Handling History'):
                 pdf.set_font("Courier", 'B', size=12)
                 pdf.cell(0, 10, txt="Handling History", ln=True)
                 pdf.set_font("Courier", size=10)
-                history = json.loads(item['Handling History']) if isinstance(item['Handling History'], str) else item['Handling History']
+                
+                history = item.get('Handling History', [])
+                if isinstance(history, str):
+                    history = history.split('\n')
                 for entry in history:
-                    pdf.cell(0, 5, txt=f"{entry}", ln=True)
-                pdf.ln(5)
+                    pdf.cell(0, 5, txt=entry, ln=True)
             
             # Add a separator between items
             pdf.cell(0, 5, txt="_" * 80, ln=True)
             pdf.ln(10)
         
         # Add footer
+        pdf.ln(10)
         pdf.set_font("Courier", 'I', size=8)
         pdf.cell(0, 5, txt="Generated by SPATRAC - Traceability Management System", ln=True, align='C')
         
@@ -2782,6 +2807,78 @@ def save_report_as_pdf(filename, report_data, title, start_date, end_date, auth_
         print(f"DEBUG: Error saving PDF report: {str(e)}")
         sg.popup_error(f'Error saving PDF report: {str(e)}', font=FONT_NORMAL)
         return False
+
+def remove_duplicate_recipe_ingredients():
+    """
+    Remove duplicate entries from recipe_ingredients table.
+    Keeps the first occurrence of each recipe_id-ingredient_code combination.
+    Returns the number of duplicates removed.
+    """
+    try:
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        # Create temporary table with unique combinations
+        cursor.execute('''
+            CREATE TEMPORARY TABLE temp_recipe_ingredients AS
+            SELECT MIN(id) as id, recipe_id, ingredient_code, quantity, unit
+            FROM recipe_ingredients
+            GROUP BY recipe_id, ingredient_code
+        ''')
+        
+        # Get count of duplicates that will be removed
+        cursor.execute('''
+            SELECT COUNT(*) FROM recipe_ingredients
+            WHERE id NOT IN (SELECT id FROM temp_recipe_ingredients)
+        ''')
+        duplicate_count = cursor.fetchone()[0]
+        
+        # Delete all rows and reinsert only unique combinations
+        cursor.execute('DELETE FROM recipe_ingredients')
+        cursor.execute('''
+            INSERT INTO recipe_ingredients (id, recipe_id, ingredient_code, quantity, unit)
+            SELECT * FROM temp_recipe_ingredients
+        ''')
+        
+        # Drop temporary table
+        cursor.execute('DROP TABLE temp_recipe_ingredients')
+        
+        conn.commit()
+        print(f"Removed {duplicate_count} duplicate recipe ingredients")
+        return duplicate_count
+        
+    except sqlite3.Error as e:
+        print(f"Database error removing duplicates: {e}")
+        if 'conn' in locals():
+            conn.rollback()
+        return -1
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+def check_recipe_ingredient_duplicates():
+    """
+    Check for duplicate entries in recipe_ingredients table.
+    Returns the count of duplicates found.
+    """
+    try:
+        conn = sqlite3.connect('spatrac.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT COUNT(*) - COUNT(DISTINCT recipe_id || '_' || ingredient_code)
+            FROM recipe_ingredients
+        ''')
+        
+        duplicate_count = cursor.fetchone()[0]
+        return duplicate_count
+        
+    except sqlite3.Error as e:
+        print(f"Database error checking duplicates: {e}")
+        return -1
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 if __name__ == "__main__":
     initialize_database()  # Initialize/update database schema
