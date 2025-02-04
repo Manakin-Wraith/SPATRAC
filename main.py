@@ -232,7 +232,7 @@ def add_product_to_inventory(values, auth_system):
                 supplier_batch, sell_by_date, received_date,
                 received_by, status, department, handling_history,
                 tracking_id, barcode_image, department_manager, supplier_name, supplier_address, country_of_origin, packaging_type, food_handler_name, packaging_batch_code
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             values['-PRODUCT_CODE-'],
             values['-DESCRIPTION-'],
@@ -1868,7 +1868,7 @@ def add_received_product(product, auth_system, window=None):
                 received_date, received_by, handling_history,
                 temperature_log, department, tracking_id,
                 barcode_image, department_manager, supplier_name, supplier_address, country_of_origin, packaging_type, food_handler_name, packaging_batch_code
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             product['Product Code'],
             product['Product Description'],
